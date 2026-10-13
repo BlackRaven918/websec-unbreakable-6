@@ -9,7 +9,7 @@ permissions:
 jobs:
   test:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, g6-deploy]
+    runs-on: [self-hosted, linux, g6-deploy, x64]
     steps:
       - name: Controleer gebruiker en Docker
         run: |
