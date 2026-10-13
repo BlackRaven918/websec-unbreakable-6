@@ -108,11 +108,11 @@ jobs:
       shell: bash
       run: |
         gh api --paginate \
-      "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&tool_name=CodeQL&ref=$GITHUB_REF&per_page=100" \
-      --jq '.[] | select(.rule.security_severity_level == "critical") | .html_url' \
-      > critical-alerts.txt
+          "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&tool_name=CodeQL&ref=$GITHUB_REF&per_page=100" \
+          --jq '.[] | select(.rule.security_severity_level == "critical") | .html_url' \
+        > critical-alerts.txt
 
-    if [ -s critical-alerts.txt ]; then
-      cat critical-alerts.txt
-      exit 1
-    fi
+        if [ -s critical-alerts.txt ]; then
+          cat critical-alerts.txt
+          exit 1
+        fi
