@@ -21,6 +21,9 @@ on:
 
 jobs:
   analyze:
+    with:
+      category: "/language:${{matrix.language}}"
+      wait-for-processing: true
     name: Analyze (${{ matrix.language }})
     # Runner size impacts CodeQL analysis time. To learn more, please see:
     #   - https://gh.io/recommended-hardware-resources-for-running-codeql
@@ -99,3 +102,17 @@ jobs:
       uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
+    - name: Blokkeer open kritieke CodeQL-bevindingen
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+    gh api --paginate \
+      "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&tool_name=CodeQL&ref=$GITHUB_REF&per_page=100" \
+      --jq '.[] | select(.rule.security_severity_level == "critical") | .html_url' \
+      > critical-alerts.txt
+
+    if [ -s critical-alerts.txt ]; then
+      cat critical-alerts.txt
+      exit 1
+    fi
