@@ -1,0 +1,65 @@
+name: Scan en deploy
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    uses: ./.github/workflows/gitleaks.yml
+
+  codeql:
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
+  osv:
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/osv-scanner.yml
+
+  deploy:
+    needs: [gitleaks, codeql, osv]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, g06-deploy, x64]
+    timeout-minutes: 20
+    concurrency:
+      group: deployment-g06
+      cancel-in-progress: false
+    env:
+      COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
+    steps:
+      - name: Checkout gecontroleerde commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Controleer deploymentconfiguratie
+        shell: bash
+        run: |
+          : "${COMPOSE_PROJECT_NAME:?Stel COMPOSE_PROJECT_NAME in bij GitHub Actions Variables}"
+          docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml config --quiet
+
+      - name: Bouw app
+        shell: bash
+        run: docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml build app
+
+      - name: Deploy als deze commit nog de nieuwste op main is
+        shell: bash
+        run: |
+          git fetch --no-tags origin main
+          if [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_SHA" ]; then
+            echo "Een nieuwere commit staat op main; deze deployment wordt overgeslagen."
+            exit 0
+          fi
+
+          docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml up -d --no-build --wait --wait-timeout 180
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-connrefused --max-time 10 http://127.0.0.1:8080/ > /dev/null
+          echo "Deployment voltooid: $GITHUB_SHA"
