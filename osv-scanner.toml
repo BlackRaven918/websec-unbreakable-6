@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GHSA-5crp-9r3c-p9vr"
+reason = "Aanwezig in de oorspronkelijke oefenapp; tijdelijk aanvaard voor opdracht 2."
