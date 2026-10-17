@@ -34,6 +34,8 @@ jobs:
       cancel-in-progress: false
     env:
       COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
+      APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+      LE_EMAIL: ${{ vars.LE_EMAIL }}
     steps:
       - name: Checkout gecontroleerde commit
         uses: actions/checkout@v6
@@ -44,7 +46,10 @@ jobs:
       - name: Controleer deploymentconfiguratie
         shell: bash
         run: |
-          : "${COMPOSE_PROJECT_NAME:?Stel COMPOSE_PROJECT_NAME in bij GitHub Actions Variables}"
+          set -euo pipefail
+          : "${COMPOSE_PROJECT_NAME:?Stel COMPOSE_PROJECT_NAME in bij Actions Variables}"
+          : "${APP_DOMAIN:?Stel APP_DOMAIN in bij Actions Variables}"
+          : "${LE_EMAIL:?Stel LE_EMAIL in bij Actions Variables}"
           docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml config --quiet
 
       - name: Bouw app
@@ -54,20 +59,32 @@ jobs:
       - name: Deploy als deze commit nog de nieuwste op main is
         shell: bash
         run: |
+          set -euo pipefail
+
           git fetch --no-tags origin main
           if [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_SHA" ]; then
             echo "Een nieuwere commit staat op main; deze deployment wordt overgeslagen."
             exit 0
           fi
 
-          docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml up -d --no-build --wait --wait-timeout 180
-          if ! curl --fail --silent --show-error \
-            --retry 60 --retry-delay 2 --retry-all-errors --retry-max-time 180 \
-            --connect-timeout 2 --max-time 5 --output /dev/null \
-            http://127.0.0.1:8080/health; then
-            echo "De app antwoordt niet op /health. Containerstatus en logs:"
+          if ! docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml \
+            up -d --no-build --wait --wait-timeout 180; then
             docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml ps --all
-            docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml logs --no-color --tail 100 app db
+            docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml \
+              logs --no-color --tail 100 app db bunkerweb bw-scheduler
             exit 1
           fi
+
+          if ! curl --fail --silent --show-error \
+            --resolve "${APP_DOMAIN}:443:127.0.0.1" \
+            --retry 60 --retry-delay 2 --retry-all-errors --retry-max-time 180 \
+            --connect-timeout 2 --max-time 5 --output /dev/null \
+            "https://${APP_DOMAIN}/health"; then
+            echo "HTTPS-healthcheck via BunkerWeb mislukt. Containerstatus en logs:"
+            docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml ps --all
+            docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml \
+              logs --no-color --tail 100 app db bunkerweb bw-scheduler
+            exit 1
+          fi
+
           echo "Deployment voltooid: $GITHUB_SHA"
