@@ -1,12 +1,13 @@
 services:
   app:
     build: ./app
-    ports:
-      - "8080:8080"
     environment:
       ConnectionStrings__Unbreakable: "Host=db;Port=5432;Database=unbreakable;Username=unbreakable;Password=Unbr3akable!2026"
     depends_on:
       - db
+    networks:
+      - backend
+      - database
     restart: unless-stopped
 
   db:
@@ -15,9 +16,55 @@ services:
       POSTGRES_DB: unbreakable
       POSTGRES_USER: unbreakable
       POSTGRES_PASSWORD: Unbr3akable!2026
+    networks:
+      - database
     volumes:
       - dbdata:/var/lib/postgresql/data
     restart: unless-stopped
+  bunkerweb:
+    image: bunkerity/bunkerweb:1.6.16
+    ports:
+      - "80:8080"
+      - "443:8443"
+    environment:
+      API_WHITELIST_IP: "127.0.0.0/8 10.20.30.0/24"
+    networks:
+      - bw-control
+      - backend
+    restart: unless-stopped
 
+  bw-scheduler:
+    image: bunkerity/bunkerweb-scheduler:1.6.16
+    depends_on:
+      - bunkerweb
+    environment:
+      API_WHITELIST_IP: "127.0.0.0/8 10.20.30.0/24"
+      BUNKERWEB_INSTANCES: "bunkerweb"
+      SERVER_NAME: "${APP_DOMAIN:?Set APP_DOMAIN in .env}"
+
+      SERVE_FILES: "no"
+      USE_REVERSE_PROXY: "yes"
+      REVERSE_PROXY_URL: "/"
+      REVERSE_PROXY_HOST: "http://app:8080"
+
+      AUTO_LETS_ENCRYPT: "yes"
+      EMAIL_LETS_ENCRYPT: "${LE_EMAIL:?Set LE_EMAIL in .env}"
+      LETS_ENCRYPT_CHALLENGE: "http"
+      REDIRECT_HTTP_TO_HTTPS: "yes"
+    volumes:
+      - bw-storage:/data
+    networks:
+      - bw-control
+    restart: unless-stopped
 volumes:
   dbdata:
+  bw-storage:
+networks:
+  bw-control:
+    ipam:
+      config:
+        - subnet: 10.20.30.0/24
+  backend:
+    internal: true
+  database:
+    internal: true

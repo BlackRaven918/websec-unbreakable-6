@@ -32,7 +32,7 @@ function renderLogin() {
     const user = currentUser();
     app.innerHTML = `
         <div class="text-center mb-5">
-            <h1 class="display-4">Unbreakable 4</h1>
+            <h1 class="display-4">Unbreakable WAF</h1>
             <p class="lead">Berichten die niemand anders kan lezen. Dat is toch de bedoeling.</p>
         </div>
         <div class="row justify-content-center">
