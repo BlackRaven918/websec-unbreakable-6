@@ -1,6 +1,6 @@
 # Pipeline en aanvaarde bevindingen
 
-Groep g06, Moha & Jasper.
+Groep g06, Jasper Vanhoutte en Mohammed Ben Hammou.
 
 ## Scans en DSOMM
 
@@ -12,6 +12,8 @@ De workflow `Scan en deploy` (`.github/workflows/main.yml`) draait bij elke push
 | SAST | CodeQL (C# en JavaScript) | Static analysis for important server side components en Static analysis for important client side components (Static depth for applications, niveau 3) | Bij een open melding met ernst high of critical |
 | SCA | OSV-Scanner | Software Composition Analysis (server side) (Static depth for applications, niveau 2) | Bij een nieuwe kwetsbaarheid die niet in `osv-scanner.toml` staat |
 | Uitrollen | Self-hosted runner en Docker Compose | Automated deployment process (Build and Deployment, Deployment, niveau 1) | Als de HTTPS-healthcheck via BunkerWeb niet lukt |
+
+Link met opdracht 1: daar kozen we niveau 3 voor Static depth for applications (SAST op client en server, SCA aan client- en serverzijde) en voor Static depth for infrastructure (secret scanning). CodeQL dekt nu SAST op client en server, OSV-Scanner de SCA aan de serverkant en gitleaks het secret scanning in code. Nog niet gehaald uit opdracht 1: SCA aan de clientkant (jQuery en Bootstrap in `wwwroot/lib`), SBOM, image scanning en het signeren van images (Build, niveau 3).
 
 Andere DSOMM-activiteiten die we invullen: Simple false positive treatment en Treatment of defects with high or critical severity (Consolidation, niveau 1), Environment depending configuration parameters (secrets) (Deployment, niveau 2) en Pinning of artifacts (Build, niveau 2) voor de actions die op een commit staan.
 
