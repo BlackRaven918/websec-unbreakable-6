@@ -31,6 +31,20 @@ jobs:
         with:
           gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
           gemini_model: "${{ vars.GEMINI_MODEL || 'gemini-3.5-flash-lite' }}"
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 40
+              },
+              "tools": {
+                "core": [
+                  "read_file",
+                  "list_directory",
+                  "glob",
+                  "grep_search"
+                ]
+              }
+            }
           prompt: |
             Beoordeel de applicatiecode in app/ op beveiligingsproblemen.
             Gebruik de OWASP Secure Agent Playbook-play code-review-security
@@ -41,6 +55,7 @@ jobs:
             Wijzig geen bestanden.
 
       - name: Run Gemini pull request review
+        if: github.event_name == 'pull_request'
         uses: google-github-actions/run-gemini-cli@v0
         env:
           # Zonder dit vraagt "gemini extensions install" een tweede bevestiging en blijft de job hangen.
