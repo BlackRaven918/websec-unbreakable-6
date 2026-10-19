@@ -99,6 +99,7 @@ jobs:
       with:
         category: "/language:${{matrix.language}}"
         wait-for-processing: true
+    # Kritiek is voor ons high of critical (security severity vanaf 7.0), zie docs/pipeline-en-bevindingen.md
     - name: Blokkeer open kritieke CodeQL-bevindingen
       env:
         GH_TOKEN: ${{ github.token }}
@@ -106,7 +107,7 @@ jobs:
       run: |
         gh api --paginate \
           "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&tool_name=CodeQL&ref=$GITHUB_REF&per_page=100" \
-          --jq '.[] | select(.rule.security_severity_level == "critical") | .html_url' \
+          --jq '.[] | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high") | .html_url' \
           > critical-alerts.txt
 
         if [ -s critical-alerts.txt ]; then

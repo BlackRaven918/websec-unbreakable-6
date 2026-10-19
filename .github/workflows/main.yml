@@ -7,9 +7,11 @@ permissions:
   contents: read
 
 jobs:
+  # DSOMM: Test for stored secrets in code
   gitleaks:
     uses: ./.github/workflows/gitleaks.yml
 
+  # DSOMM: Static analysis for important server side en client side components
   codeql:
     permissions:
       contents: read
@@ -18,6 +20,7 @@ jobs:
       security-events: write
     uses: ./.github/workflows/codeql.yml
 
+  # DSOMM: Software Composition Analysis (server side)
   osv:
     permissions:
       actions: read
@@ -25,6 +28,7 @@ jobs:
       security-events: write
     uses: ./.github/workflows/osv-scanner.yml
 
+  # DSOMM: Automated deployment process
   deploy:
     needs: [gitleaks, codeql, osv]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -37,6 +41,7 @@ jobs:
       COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
       APP_DOMAIN: ${{ vars.APP_DOMAIN }}
       LE_EMAIL: ${{ vars.LE_EMAIL }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
     steps:
       - name: Checkout gecontroleerde commit
         uses: actions/checkout@v6
@@ -51,6 +56,7 @@ jobs:
           : "${COMPOSE_PROJECT_NAME:?Stel COMPOSE_PROJECT_NAME in bij Actions Variables}"
           : "${APP_DOMAIN:?Stel APP_DOMAIN in bij Actions Variables}"
           : "${LE_EMAIL:?Stel LE_EMAIL in bij Actions Variables}"
+          : "${DB_PASSWORD:?Stel DB_PASSWORD in bij Actions Secrets}"
           docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml config --quiet
 
       - name: Bouw app

@@ -1,3 +1,4 @@
 [[IgnoredVulns]]
 id = "GHSA-5crp-9r3c-p9vr"
-reason = "Aanwezig in de oorspronkelijke oefenapp; tijdelijk aanvaard voor opdracht 2."
+ignoreUntil = 2027-01-31
+reason = "Echt lek in Newtonsoft.Json 12.0.1 (DoS bij diep geneste JSON), maar niet bereikbaar: de app deserialiseert geen JSON met Newtonsoft, alleen SerializeObject bij de export. Upgraden naar 13.0.1 of hoger."
