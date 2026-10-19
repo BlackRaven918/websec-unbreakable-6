@@ -58,6 +58,9 @@ jobs:
               },
               "tools": {
                 "core": [
+                  "mcp_github_pull_request_read",
+                  "mcp_github_pull_request_review_write",
+                  "mcp_github_add_comment_to_pending_review",
                   "activate_skill",
                   "read_file",
                   "read_many_files",
