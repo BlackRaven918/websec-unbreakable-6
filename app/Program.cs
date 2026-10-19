@@ -90,6 +90,14 @@ api.MapGet("/messages/search", async (HttpRequest request, UnbreakableContext db
     return Results.Ok(messages);
 });
 
+// TEST: alleen om te tonen dat de pipeline faalt op een nieuwe kritieke bevinding. Niet mergen.
+api.MapGet("/messages/test-kritiek", async (HttpRequest request, UnbreakableContext db) =>
+{
+    var naam = request.Query["naam"].ToString();
+    var sql = "SELECT * FROM \"Messages\" WHERE \"Sender\" = '" + naam + "'";
+    return Results.Ok(await db.Messages.FromSqlRaw(sql).ToListAsync());
+});
+
 api.MapGet("/messages/export", async (HttpRequest request, UnbreakableContext db) =>
 {
     var user = CurrentUser(request);
