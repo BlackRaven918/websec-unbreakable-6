@@ -2,7 +2,7 @@ services:
   app:
     build: ./app
     environment:
-      ConnectionStrings__Unbreakable: "Host=db;Port=5432;Database=unbreakable;Username=unbreakable;Password=Unbr3akable!2026"
+      ConnectionStrings__Unbreakable: "Host=db;Port=5432;Database=unbreakable;Username=unbreakable;Password=${DB_PASSWORD:?Set DB_PASSWORD}"
     depends_on:
       - db
     networks:
@@ -15,7 +15,7 @@ services:
     environment:
       POSTGRES_DB: unbreakable
       POSTGRES_USER: unbreakable
-      POSTGRES_PASSWORD: Unbr3akable!2026
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD}"
     networks:
       - database
     volumes:

@@ -1,1 +1,3 @@
+# Aanvaard: de key in appsettings.json is verzonnen voor de oefenapp (endpoint push.unbreakable.example),
+# geen echt geheim. Echte geheimen van de pipeline staan in GitHub Secrets. Zie docs/pipeline-en-bevindingen.md
 84b267a055ee286a3ebf53a541600555e8ff0fc0:app/appsettings.json:generic-api-key:15
