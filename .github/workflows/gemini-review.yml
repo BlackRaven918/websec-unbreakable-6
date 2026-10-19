@@ -34,8 +34,6 @@ jobs:
           GEMINI_API_KEY: '${{ secrets.GEMINI_API_KEY }}'
         with:
           gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
-          # Tijdelijk aan om in het log te zien welke stappen de agent zet.
-          gemini_debug: true
           # Gratis AI Studio-key: geen Pro-quota (limit: 0); gemini-3.8-flash heeft maar 20 requests per dag.
           # Ander model kiezen kan via de repo-variabele GEMINI_MODEL.
           gemini_model: "${{ vars.GEMINI_MODEL || 'gemini-3.5-flash-lite' }}"
