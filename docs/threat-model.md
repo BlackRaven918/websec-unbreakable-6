@@ -1,45 +1,55 @@
-# Basis threat model van de starter app
+# Threat model, stand na opdracht 2
 
-Dit is het vertrekpunt voor wie opdracht 1 niet heeft. Het beschrijft de starter app zoals ze is: zonder pipeline, zonder WAF, zonder inloggen. Vul het aan in elke opdracht.
+Groep g06, Jasper Vanhoutte en Mohammed Ben Hammou.
 
-## Architectuur
+Dit is het threat model uit opdracht 1, aangevuld met wat er in opdracht 2 gebouwd werd: de pipeline in GitHub Actions, de self-hosted runner, de AI-agent (Gemini) en BunkerWeb met HTTPS via Let's Encrypt. Het is één model dat meegroeit, geen nieuw. De nummers T1 tot T11 zijn die van opdracht 1, T12 tot T18 zijn nieuw.
 
-```mermaid
-flowchart LR
-  subgraph Internet
-    U([Gebruiker<br/>browser met de SPA])
-    D([Developer<br/>laptop])
-    GH[(GitHub<br/>repository)]
-  end
-  subgraph Server["Server (Linux, Docker)"]
-    subgraph Docker["Docker netwerk"]
-      A((App<br/>statische SPA en API))
-      DB[(PostgreSQL)]
-    end
-  end
-  U -- "1. HTTP, poort 8080<br/>SPA laden, geen authenticatie" --> A
-  U -- "2. HTTP, poort 8080, JSON naar /api<br/>naam in de header X-User" --> A
-  A -- "3. SQL over TCP, poort 5432<br/>wachtwoord" --> DB
-  D -- "4. SSH, poort 22<br/>rootwachtwoord" --> Server
-  D -- "5. HTTPS<br/>GitHub account" --> GH
-  Server -- "6. HTTPS<br/>publieke repo, geen authenticatie" --> GH
-```
+![Architectuur na opdracht 2](architectuur-opdracht2.png)
 
-Vertrouwensgrenzen: tussen de browser en de server, tussen het internet en de server, en tussen de server en het Docker netwerk. Let op: de SPA draait in de browser van de gebruiker. Alles wat de SPA controleert, kan een aanvaller omzeilen. Enkel wat de API controleert, telt.
+De tekening is `architectuur-opdracht2.drawio` (draw.io). Groen en oranje is gebouwd, grijs komt later. Op elke gebouwde flow staat een nummer F1 tot F11 met protocol, poort en authenticatie. De rode labels zijn de dreigingen, bij het onderdeel waar ze horen.
 
-## Dreigingen
+## Data flows
 
-Formulering: een A doet B op C door D, wat leidt tot E.
+| Nr | Van → naar | Protocol | Poort | Authenticatie | Kanaal | Encryptie | Data |
+|---|---|---|---|---|---|---|---|
+| F1 | Gebruiker → BunkerWeb | HTTPS | 443 | geen, naam in de header `X-User` | internet (IPv6) | TLS (Let's Encrypt), nog geen E2EE | SPA, berichten in JSON |
+| F2 | BunkerWeb → frontend (SPA) | HTTP | 8080 | geen | intern Docker-netwerk `backend` | geen | statische bestanden |
+| F3 | BunkerWeb → backend / API | HTTP | 8080 | geen, naam in `X-User` | intern Docker-netwerk `backend` | geen | API-verzoeken in JSON |
+| F4 | Backend → PostgreSQL | SQL over TCP | 5432 | wachtwoord (GitHub Secret `DB_PASSWORD`) | intern Docker-netwerk `database` | geen | berichten, leesbaar |
+| F5 | Developer → server | SSH via de jumphost | 22 | wachtwoord (root) | internet, jumphost, IPv6 | SSH | beheer |
+| F6 | Developer → GitHub | git over HTTPS | 443 | GitHub-account en token | internet | TLS | broncode |
+| F7 | GitHub → pipeline | push- of PR-event | n.v.t. | `GITHUB_TOKEN` met minimale rechten | binnen GitHub | TLS | commit of pull request |
+| F8 | Self-hosted runner → GitHub | HTTPS, uitgaand (long poll) | 443 | runner-token | internet | TLS | jobs en logs |
+| F9 | Runner → Docker | Docker API over een Unix-socket | n.v.t. | lokaal, docker-groep (praktisch root) | lokaal op de server | geen | `docker compose build` en `up` |
+| F10 | BunkerWeb ↔ Let's Encrypt | HTTPS (ACME) en HTTP-challenge | 443 en 80 | ACME-account (e-mail), bewijs van domeinbeheer | internet | TLS | certificaat |
+| F11 | Pipeline → Gemini API | HTTPS | 443 | API-key (GitHub Secret `GEMINI_API_KEY`) | internet | TLS | broncode en prompt |
 
-| # | STRIDE | Dreiging | Maatregel | Opdracht |
+## Dreigingen uit opdracht 1
+
+| # | STRIDE | Dreiging | Maatregel uit opdracht 1 | Stand na opdracht 2 |
 |---|---|---|---|---|
-| 1 | Spoofing | Een gebruiker zet de naam van iemand anders in de header X-User, door het ontbreken van authenticatie, wat leidt tot het lezen van andermans berichten | Inloggen via een identity provider, tokens die de API valideert | 4 |
-| 2 | Information disclosure | Een aanvaller luistert het verkeer af op flow 1 en 2, door het gebruik van HTTP, wat leidt tot het lekken van berichten | HTTPS | 2 |
-| 3 | Information disclosure | Een beheerder of aanvaller met toegang tot de databank leest alle berichten, doordat ze onversleuteld bewaard worden, wat leidt tot verlies van vertrouwelijkheid | End to end encryptie | 3 |
-| 4 | Elevation of privilege | Een gebruiker vraagt een bericht op met het id van iemand anders, door het ontbreken van autorisatie, wat leidt tot het lezen of verwijderen van andermans berichten | Autorisatie per bericht | 5 |
-| 5 | Information disclosure | Iemand met toegang tot de repository leest het databankwachtwoord, doordat het in de configuratie staat, wat leidt tot volledige toegang tot de databank | Geheimen in een secrets manager | 6 |
-| 6 | Tampering | Een aanvaller stuurt kwaadaardige invoer via een invoerveld, door onvoldoende validatie of encoding, wat leidt tot het uitvoeren van code of queries | Secure coding, SAST en een WAF | 2 |
-| 7 | Tampering | Een aanvaller verstopt kwaadaardige code in een bibliotheek die de app gebruikt, door het ontbreken van controle op afhankelijkheden, wat leidt tot overname van de app | SCA in de pipeline | 2 |
-| 8 | Spoofing | Een aanvaller raadt het rootwachtwoord van de server via flow 4, door aanmelden met wachtwoord, wat leidt tot overname van de server | SSH sleutels, fail2ban | 2 |
-| 9 | Denial of service | Een aanvaller overspoelt de app met requests, door het ontbreken van rate limiting, wat leidt tot onbeschikbaarheid | Rate limiting in de WAF | 2 |
-| 10 | Repudiation | Een gebruiker ontkent dat hij een bericht stuurde, doordat de afzender niet bewezen wordt en er geen logging is, wat leidt tot discussie zonder bewijs | Authenticatie, handtekeningen en logging | 3 en 4 |
+| T1 | S | Credential stuffing op de login | Gelekte wachtwoorden checken, MFA, rate limiting | Open, opdracht 4. Er is nog geen login. |
+| T2 | S | Server geeft een valse publieke sleutel | Fingerprints of safety numbers | Open, opdracht 3 |
+| T3 | T | Kwaadaardige dependency via de pipeline | SCA in de pipeline, SBOM | Deels. OSV-Scanner blokkeert nieuwe kwetsbare packages. Nog geen SBOM, en OSV ziet jQuery en Bootstrap in `wwwroot/lib` niet. |
+| T4 | T | Gemanipuleerde frontend-bundel | Lockfile met hashes, alleen via de pipeline, images signeren | Deels. De frontend gaat alleen via de pipeline online, exact de gescande commit. Nog geen signing en geen registry. |
+| T5 | R | Developer ontkent een code- of configwijziging | Eigen accounts, signed commits, branch protection met review | Deels. Eigen GitHub-accounts en alles in de git-geschiedenis. Nog geen signed commits en geen branch protection: op 19 okt werd nog rechtstreeks naar main gepusht. |
+| T6 | I | Beheerder leest metadata in de databank | Berichten verwijderen, padding | Open, opdracht 3 |
+| T7 | I | XSS steelt sleutels of plaintext | Sanitisation, output encoding | Deels. CodeQL vindt de DOM-XSS en de WAF blokkeert `<script>`. De stored XSS via het onderwerp zit nog in de code. |
+| T8 | I | Secrets lekken uit de repo of `.env` | `.env` in `.gitignore`, gitleaks in CI, secret manager | Deels, vervroegd. gitleaks draait bij elke push, pipeline-secrets staan in GitHub Secrets. Het wachtwoord staat nog in `appsettings.json` (opdracht 6). |
+| T9 | D | Flood op de API of de login | Rate limiting in de WAF | Opgelost met de rate limiting van BunkerWeb, maar zie T15 |
+| T10 | E | Container escape naar de host | Non-root containers, rootless Docker | Open. De app draait als root in de container en de runner heeft via de docker-groep root-rechten. |
+| T11 | E | IDOR: berichten van een ander ophalen | Autorisatie per request | Open, opdracht 5. De AI-agent vond het ook. |
+
+## Nieuwe dreigingen door de pipeline en de WAF
+
+| # | STRIDE | Dreiging | Maatregel | Stand |
+|---|---|---|---|---|
+| T12 | E | Een pull request uit een fork draait code op de self-hosted runner, met Docker-rechten op de server | Goedkeuring voor workflows van alle externe bijdragers, deploy alleen bij een push naar main | Beperkt |
+| T13 | T | Prompt injection: tekst in een pull request stuurt de AI-agent | De agent mag alleen lezen en drie GitHub-tools gebruiken, forks krijgen geen secrets, een mens beslist over de merge | Beperkt |
+| T14 | I | SQL-injectie via de header `X-User` omzeilt de WAF en leest alle berichten | Queries met parameters in de code, echte authenticatie | Open, aangetoond in opdracht 2 |
+| T15 | D | De WAF ziet elke bezoeker als 10.20.30.1, dus een ban na te veel 403's treft iedereen, ook de healthcheck | IPv6 op het Docker-netwerk zodat het echte IP doorkomt | Open |
+| T16 | T | Een gekaapte action leest de secrets of verandert de build | Actions vastpinnen op een commit-SHA, minimale `permissions` | Deels: OSV, upload-artifact en de play staan vast, de andere actions nog niet |
+| T17 | I | De broncode gaat naar de Gemini API, een Amerikaanse derde partij | Geen echte geheimen of persoonsgegevens in de repo, bibliotheken uitgesloten, later een Europees of eigen model | Aanvaard voor deze oefenapp |
+| T18 | D | Bij herhaald uitrollen raakt de gedeelde limiet van Let's Encrypt op | Certificaat bewaren in het volume `bw-storage` | Opgelost |
+
+Buiten scope blijft wat al in opdracht 1 stond, plus aanvallen op GitHub, Google of Let's Encrypt zelf.
