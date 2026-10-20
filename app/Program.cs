@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using System.Text.RegularExpressions;
 using Unbreakable.Data;
 using Unbreakable.Models;
 
@@ -13,7 +14,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Databank aanmaken en vullen met voorbeeldberichten.
+// Databank aanmaken. Nieuwe berichten worden uitsluitend in de browser versleuteld.
 // De databank kan iets later opstarten dan de app, dus we proberen een paar keer.
 using (var scope = app.Services.CreateScope())
 {
@@ -25,7 +26,6 @@ using (var scope = app.Services.CreateScope())
         try
         {
             context.Database.EnsureCreated();
-            SeedData.Initialize(context);
             break;
         }
         catch (Exception ex) when (attempt < 30)
@@ -74,22 +74,6 @@ api.MapGet("/messages", async (HttpRequest request, UnbreakableContext db) =>
     return Results.Ok(await inbox.OrderByDescending(m => m.SentAt).ToListAsync());
 });
 
-api.MapGet("/messages/search", async (HttpRequest request, UnbreakableContext db) =>
-{
-    var user = CurrentUser(request);
-    if (string.IsNullOrEmpty(user))
-    {
-        return Results.Unauthorized();
-    }
-
-    var q = request.Query["q"].ToString();
-    var sql = "SELECT * FROM \"Messages\" WHERE \"Recipient\" = '" + user + "' " +
-              "AND (\"Subject\" ILIKE '%" + q + "%' OR \"Body\" ILIKE '%" + q + "%')";
-
-    var messages = await db.Messages.FromSqlRaw(sql).OrderByDescending(m => m.SentAt).ToListAsync();
-    return Results.Ok(messages);
-});
-
 api.MapGet("/messages/export", async (HttpRequest request, UnbreakableContext db) =>
 {
     var user = CurrentUser(request);
@@ -114,12 +98,24 @@ api.MapGet("/messages/{id:int}", async (int id, UnbreakableContext db) =>
 
 api.MapPost("/messages", async (Message message, HttpRequest request, UnbreakableContext db) =>
 {
-    // Geen afzender meegegeven? Dan nemen we wie je bent.
-    if (string.IsNullOrEmpty(message.Sender))
+    var user = CurrentUser(request);
+    if (string.IsNullOrEmpty(user))
     {
-        message.Sender = CurrentUser(request);
+        return Results.Unauthorized();
+    }
+    if (user.Length < 2 || user.Length > 40 || string.IsNullOrWhiteSpace(message.Recipient)
+        || message.Recipient.Length < 2 || message.Recipient.Length > 40)
+    {
+        return Results.BadRequest("Afzender en ontvanger moeten 2 tot 40 tekens bevatten.");
+    }
+    // Controleer uitsluitend het formaat; de server heeft nooit de sleutel.
+    if (message.Subject != "MOD63:1" || message.Body == null || message.Body.Length > 2000
+        || !Regex.IsMatch(message.Body, @"\AMOD63:1:(?:[A-Za-z0-9_]{2})+\z"))
+    {
+        return Results.BadRequest("Alleen mod63-versleutelde berichten worden opgeslagen.");
     }
 
+    message.Sender = user;
     message.Id = 0;
     message.SentAt = DateTime.UtcNow;
 

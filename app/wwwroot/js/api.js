@@ -1,5 +1,7 @@
 // Praat met de API. Alles wat de SPA weet, komt van hier.
 
+import { isEncrypted } from './crypto.js';
+
 const USER_KEY = 'unbreakable_user';
 
 export function currentUser() {
@@ -31,9 +33,11 @@ async function call(method, path, body) {
 export const api = {
     users: () => call('GET', '/users'),
     inbox: (from) => call('GET', '/messages' + (from ? '?from=' + encodeURIComponent(from) : '')),
-    search: (q) => call('GET', '/messages/search?q=' + encodeURIComponent(q)),
     message: (id) => call('GET', '/messages/' + id),
-    send: (message) => call('POST', '/messages', message),
+    send: ({ recipient, subject, body }) => {
+        if (!isEncrypted({ subject, body })) throw new Error('Alleen versleutelde berichten kunnen worden verstuurd.');
+        return call('POST', '/messages', { recipient, subject, body });
+    },
     remove: (id) => call('DELETE', '/messages/' + id),
     exportJson: () => call('GET', '/messages/export'),
 };
