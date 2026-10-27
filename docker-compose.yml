@@ -2,7 +2,7 @@ services:
   app:
     build: ./app
     environment:
-      ConnectionStrings__Unbreakable: "Host=db;Port=5432;Database=unbreakable;Username=unbreakable;Password=Unbr3akable!2026"
+      ConnectionStrings__Unbreakable: "Host=db;Port=5432;GSS Encryption Mode=Disable;Database=unbreakable;Username=unbreakable;Password=Unbr3akable!2026"
     depends_on:
       - db
     networks:

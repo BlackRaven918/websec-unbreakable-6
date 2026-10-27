@@ -1,7 +1,10 @@
 // Elke sleutelpositie wordt precies eenmaal gebruikt, zonder herhalen.
 export const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
-export const MARKER = 'MOD63:1';
+export const MARKER = 'MOD63:2';
 const PREFIX = MARKER + ':';
+const LEGACY_MARKER = 'MOD63:1';
+const LEGACY_PREFIX = LEGACY_MARKER + ':';
+const INTEGRITY_ERROR = 'Integriteitscontrole mislukt: verkeerde sleutel of gewijzigd bericht.';
 const encoder = new TextEncoder();
 
 export function requiredKeyLength(subject, body) {
@@ -18,18 +21,51 @@ function validateKey(key, length) {
 }
 
 export function isEncrypted(message) {
-    if (message.subject !== MARKER || typeof message.body !== 'string' || !message.body.startsWith(PREFIX)) return false;
-    const ciphertext = message.body.slice(PREFIX.length);
-    return ciphertext.length > 0 && ciphertext.length % 2 === 0 && !/[^A-Za-z0-9_]/.test(ciphertext);
+    if (typeof message.body !== 'string' || message.body.length > 2000) return false;
+    if (message.subject === MARKER) {
+        return /^MOD63:2:(?:[A-Za-z0-9_]{2})+:[a-f0-9]{64}$/.test(message.body)
+            && !message.body.endsWith('\n');
+    }
+    return message.subject === LEGACY_MARKER
+        && /^MOD63:1:(?:[A-Za-z0-9_]{2})+$/.test(message.body)
+        && !message.body.endsWith('\n');
 }
 
-export function encryptMessage(subject, body, key) {
+// Ook beschadigde enveloppen moeten naar het ontsleutelformulier, nooit naar plaintext-weergave.
+export function isEncryptedEnvelope(message) {
+    return [MARKER, LEGACY_MARKER].includes(message.subject)
+        || (typeof message.body === 'string' && message.body.startsWith('MOD63:'));
+}
+
+export function isAuthenticatedEnvelope(message) {
+    return message.subject === MARKER
+        || (typeof message.body === 'string' && message.body.startsWith(PREFIX));
+}
+
+function validateHmacKey(key, encryptionKey) {
+    if (typeof key !== 'string' || key.length < 80 || /[^A-Za-z0-9_]/.test(key)) {
+        throw new Error('Gebruik een aparte HMAC-sleutel van minstens 80 tekens: A–Z, a–z, 0–9 en _.');
+    }
+    if (key === encryptionKey) throw new Error('De HMAC-sleutel moet verschillen van de mod63-sleutel.');
+}
+
+async function importHmacKey(key, encryptionKey) {
+    validateHmacKey(key, encryptionKey);
+    if (!globalThis.crypto?.subtle) throw new Error('Open de app via HTTPS of localhost.');
+    return crypto.subtle.importKey('raw', encoder.encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+}
+
+function authenticatedData(ciphertext) {
+    return encoder.encode(JSON.stringify([MARKER, ciphertext]));
+}
+
+export async function encryptMessage(subject, body, key, hmacKey) {
     if (!subject || subject.length > 100 || /[\r\n]/.test(subject) || !body || body.length > 2000) {
         throw new Error('Vul een onderwerp (maximaal 100 tekens) en een bericht (maximaal 2000 tekens) in.');
     }
     const bytes = encoder.encode(subject + '\n' + body);
     validateKey(key, bytes.length * 2);
-    if (PREFIX.length + bytes.length * 2 > 2000) {
+    if (PREFIX.length + bytes.length * 2 + 65 > 2000) {
         throw new Error('Het versleutelde bericht is te lang (maximaal 2000 tekens).');
     }
     let ciphertext = '';
@@ -38,12 +74,27 @@ export function encryptMessage(subject, body, key) {
             ciphertext += ALPHABET[(value + ALPHABET.indexOf(key[ciphertext.length])) % 63];
         }
     }
-    return { subject: MARKER, body: PREFIX + ciphertext };
+    const authenticationKey = await importHmacKey(hmacKey, key);
+    const tag = await crypto.subtle.sign('HMAC', authenticationKey, authenticatedData(ciphertext));
+    const hex = Array.from(new Uint8Array(tag), byte => byte.toString(16).padStart(2, '0')).join('');
+    return { subject: MARKER, body: PREFIX + ciphertext + ':' + hex };
 }
 
-export function decryptMessage(message, key) {
-    if (!isEncrypted(message)) throw new Error('Dit is geen ondersteund mod63-bericht.');
-    const ciphertext = message.body.slice(PREFIX.length);
+export async function decryptMessage(message, key, hmacKey) {
+    const authenticated = isAuthenticatedEnvelope(message);
+    if (!isEncrypted(message)) throw new Error(authenticated ? INTEGRITY_ERROR : 'Dit is geen ondersteund mod63-bericht.');
+    let ciphertext;
+    if (authenticated) {
+        const authenticationKey = await importHmacKey(hmacKey, key);
+        const parts = message.body.slice(PREFIX.length).split(':');
+        ciphertext = parts[0];
+        const tag = Uint8Array.from(parts[1].match(/../g), hex => parseInt(hex, 16));
+        if (!await crypto.subtle.verify('HMAC', authenticationKey, tag, authenticatedData(ciphertext))) {
+            throw new Error(INTEGRITY_ERROR);
+        }
+    } else {
+        ciphertext = message.body.slice(LEGACY_PREFIX.length);
+    }
     validateKey(key, ciphertext.length);
     const values = Array.from(ciphertext, (char, i) =>
         (ALPHABET.indexOf(char) - ALPHABET.indexOf(key[i]) + 63) % 63);

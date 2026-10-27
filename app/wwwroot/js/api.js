@@ -1,6 +1,6 @@
 // Praat met de API. Alles wat de SPA weet, komt van hier.
 
-import { isEncrypted } from './crypto.js';
+import { isEncrypted, MARKER } from './crypto.js';
 
 const USER_KEY = 'unbreakable_user';
 
@@ -35,7 +35,7 @@ export const api = {
     inbox: (from) => call('GET', '/messages' + (from ? '?from=' + encodeURIComponent(from) : '')),
     message: (id) => call('GET', '/messages/' + id),
     send: ({ recipient, subject, body }) => {
-        if (!isEncrypted({ subject, body })) throw new Error('Alleen versleutelde berichten kunnen worden verstuurd.');
+        if (subject !== MARKER || !isEncrypted({ subject, body })) throw new Error('Alleen mod63-berichten met HMAC kunnen worden verstuurd.');
         return call('POST', '/messages', { recipient, subject, body });
     },
     remove: (id) => call('DELETE', '/messages/' + id),

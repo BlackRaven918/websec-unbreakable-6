@@ -1,4 +1,4 @@
-"""Generate secure keys: python app/key-generator.py 10 --output keys.json."""
+"""Generate secure keys: python app/key-generator.py 10 --with-hmac --output keys.json."""
 
 import argparse
 import json
@@ -20,6 +20,7 @@ def main():
     parser.add_argument("amount", type=int, help="number of keys to generate")
     parser.add_argument("--length", type=int, default=80, help="characters per key (minimum/default: 80)")
     parser.add_argument("-o", "--output", default="keys.json", help="output JSON file (default: keys.json)")
+    parser.add_argument("--with-hmac", action="store_true", help="generate an independent mod63/HMAC key pair per message")
     args = parser.parse_args()
     if args.amount < 1:
         parser.error("amount must be a positive integer")
@@ -28,7 +29,17 @@ def main():
 
     try:
         with open(args.output, "x", encoding="utf-8") as output:
-            json.dump({"keys": [generate_key(args.length) for _ in range(args.amount)]}, output, indent=2)
+            keys = []
+            for _ in range(args.amount):
+                encryption_key = generate_key(args.length)
+                if args.with_hmac:
+                    hmac_key = generate_key(80)
+                    while hmac_key == encryption_key:
+                        hmac_key = generate_key(80)
+                    keys.append({"encryptionKey": encryption_key, "hmacKey": hmac_key})
+                else:
+                    keys.append(encryption_key)
+            json.dump({"keys": keys}, output, indent=2)
             output.write("\n")
     except OSError as error:
         parser.exit(1, f"Could not write {args.output}: {error}\n")

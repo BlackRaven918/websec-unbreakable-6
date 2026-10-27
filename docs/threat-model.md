@@ -25,7 +25,15 @@ flowchart LR
   Server -- "6. HTTPS<br/>publieke repo, geen authenticatie" --> GH
 ```
 
-Vertrouwensgrenzen: tussen de browser en de server, tussen het internet en de server, en tussen de server en het Docker netwerk. Let op: de SPA draait in de browser van de gebruiker. Alles wat de SPA controleert, kan een aanvaller omzeilen. Enkel wat de API controleert, telt.
+Vertrouwensgrenzen: tussen de browser en de server, tussen het internet en de server, en tussen de server en het Docker netwerk. De API moet toegangscontrole en invoerformaat zelf controleren: een aanvaller kan zijn eigen client aanpassen. Voor de end-to-end bescherming controleert de browser van de ontvanger bovendien de HMAC met een geheime sleutel die de server niet krijgt.
+
+## Mod63 met HMAC-SHA-256
+
+Nieuwe berichten gebruiken twee onafhankelijk gegenereerde, persoonlijk gedeelde sleutels: een mod63-sleutel en een aparte HMAC-sleutel. De browser versleutelt onderwerp en inhoud, en authenticeert daarna de UTF-8-encoding van `JSON.stringify(["MOD63:2", ciphertext])` met HMAC-SHA-256. De body bevat `MOD63:2:<ciphertext>:<hmac>`; de API controleert uitsluitend het formaat. De browser van de ontvanger verifieert de HMAC voordat hij ontsleutelt. Bij een fout wordt geen plaintext getoond. Sleutels worden niet verzonden of opgeslagen; alleen een vingerafdruk van de mod63-sleutel blijft lokaal voor de bestaande hergebruikcontrole.
+
+Dit detecteert wijzigingen in ciphertext of HMAC door iemand zonder HMAC-sleutel. Afzender, ontvanger en tijdstip zijn niet meebeschermd. Het voorkomt geen replay, verwijderen van berichten of vervalsing door iemand met beide sleutels. Een geldige HMAC bevestigt niet dat de ingevoerde mod63-sleutel juist is. Oude plaintext- en versie-1-berichten blijven leesbaar met een waarschuwing en krijgen geen integriteitsgarantie; een downgrade naar het oude formaat is daarom niet cryptografisch uitgesloten. De bestaande mod63-oefenversleuteling wordt niet vervangen door een standaard encryptie-algoritme.
+
+Deze bescherming veronderstelt vertrouwde browsercode: een gecompromitteerde server die kwaadaardige JavaScript serveert, kan sleutels onderscheppen of controles uitschakelen. HTTPS blijft nodig voor veilig laden en Web Crypto.
 
 ## Dreigingen
 
@@ -43,3 +51,4 @@ Formulering: een A doet B op C door D, wat leidt tot E.
 | 8 | Spoofing | Een aanvaller raadt het rootwachtwoord van de server via flow 4, door aanmelden met wachtwoord, wat leidt tot overname van de server | SSH sleutels, fail2ban | 2 |
 | 9 | Denial of service | Een aanvaller overspoelt de app met requests, door het ontbreken van rate limiting, wat leidt tot onbeschikbaarheid | Rate limiting in de WAF | 2 |
 | 10 | Repudiation | Een gebruiker ontkent dat hij een bericht stuurde, doordat de afzender niet bewezen wordt en er geen logging is, wat leidt tot discussie zonder bewijs | Authenticatie, handtekeningen en logging | 3 en 4 |
+| 11 | Tampering | Een aanvaller met schrijftoegang tot de databank wijzigt ciphertext, waardoor de ontvanger gewijzigde inhoud kan lezen | HMAC-SHA-256 met aparte sleutel; controle in de browser vóór ontsleuteling voor versie 2 | 3 |
