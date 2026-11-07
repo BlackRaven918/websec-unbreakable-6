@@ -1,8 +1,28 @@
 // De schermen van Unbreakable. Navigeren gebeurt met het deel na # in de URL.
 
 import { api, currentUser, setUser } from './api.js';
+import { encryptMessage, decryptMessage, isEncryptedEnvelope, parseEnvelope, rememberKey } from './crypto.js';
 
 const app = document.getElementById('app');
+
+function keyField() {
+    return `
+        <div class="form-group">
+            <label for="message-key">Lijn uit het codeboek</label>
+            <input id="message-key" type="password" class="form-control" autocomplete="off"
+                   spellcheck="false" autocapitalize="none" required aria-describedby="key-help" />
+            <small id="key-help" class="form-text text-muted">Plak een volledige lijn: het nummer en de 40 tekens.
+                De sleutel blijft in deze browser. Gebruik elke lijn maar één keer.</small>
+        </div>
+        <div class="form-group">
+            <label for="hmac-key">Gedeelde HMAC-sleutel</label>
+            <input id="hmac-key" type="password" class="form-control" autocomplete="off"
+                   spellcheck="false" autocapitalize="none" required minlength="32"
+                   pattern="[A-Za-z0-9_]{32,}" aria-describedby="hmac-help" />
+            <small id="hmac-help" class="form-text text-muted">Een aparte sleutel van minstens 32 tekens.
+                Die controleert of het bericht onderweg gewijzigd is.</small>
+        </div>`;
+}
 
 function escapeHtml(text) {
     return String(text)
@@ -67,8 +87,8 @@ async function renderInbox(params) {
 
     const all = await api.inbox();
     const senders = [...new Set(all.map(m => m.sender))].sort();
-    const found = q ? await api.search(q) : all;
-    const messages = found.filter(m => !from || m.sender === from);
+    const messages = all.filter(m => (!from || m.sender === from)
+        && (!q || m.sender.toLocaleLowerCase().includes(q.toLocaleLowerCase())));
 
     app.innerHTML = `
         <h1>Inbox van ${escapeHtml(user)}</h1>
@@ -86,7 +106,7 @@ async function renderInbox(params) {
                     </select>
                 </div>
                 <div class="col-auto">
-                    <label for="q">Zoeken</label>
+                    <label for="q">Zoeken op afzender</label>
                     <input id="q" class="form-control" value="${escapeHtml(q)}" />
                 </div>
                 <div class="col-auto">
@@ -98,13 +118,13 @@ async function renderInbox(params) {
         <div id="list"></div>`;
 
     if (q) {
-        window.jQuery('#searched').html('Je zocht naar: ' + q);
+        document.getElementById('searched').textContent = 'Je zocht naar: ' + q;
     }
 
     const rows = messages.map(m => `
         <tr>
             <td>${escapeHtml(m.sender)}</td>
-            <td><a href="#/bericht/${m.id}">${m.subject}</a></td>
+            <td><a href="#/bericht/${m.id}">${isEncryptedEnvelope(m) ? 'Versleuteld bericht' : escapeHtml(m.subject)}</a></td>
             <td>${formatDate(m.sentAt)}</td>
         </tr>`).join('');
 
@@ -140,14 +160,24 @@ async function renderInbox(params) {
 
 async function renderMessage(id) {
     const m = await api.message(id);
+    const encrypted = isEncryptedEnvelope(m);
+    const envelope = parseEnvelope(m);
 
     app.innerHTML = `
-        <h1>${m.subject}</h1>
+        <h1 id="message-subject">${encrypted ? 'Versleuteld bericht' : escapeHtml(m.subject)}</h1>
         <dl class="row">
             <dt class="col-sm-2">Van</dt><dd class="col-sm-10">${escapeHtml(m.sender)}</dd>
             <dt class="col-sm-2">Aan</dt><dd class="col-sm-10">${escapeHtml(m.recipient)}</dd>
             <dt class="col-sm-2">Verzonden</dt><dd class="col-sm-10">${formatDate(m.sentAt)}</dd>
+            ${envelope ? `<dt class="col-sm-2">Codeboek</dt><dd class="col-sm-10">lijn ${envelope.number}</dd>` : ''}
         </dl>
+        ${encrypted ? `
+            <form id="decrypt" autocomplete="off">
+                ${keyField()}
+                <button type="submit" class="btn btn-primary mb-3">Ontsleutelen in deze browser</button>
+                <p id="decrypt-error" class="text-danger" role="alert"></p>
+            </form>` : '<p class="text-warning">Oud bericht: dit werd onversleuteld opgeslagen.</p>'}
+        <p id="integrity-status" class="text-success" role="status"></p>
         <div class="card mb-3"><div class="card-body message-body" id="body"></div></div>
         <p>
             <button id="delete" class="btn btn-outline-danger">Verwijderen</button>
@@ -155,6 +185,45 @@ async function renderMessage(id) {
         </p>`;
 
     document.getElementById('body').textContent = m.body;
+
+    if (encrypted) {
+        const resetPlaintext = () => {
+            document.getElementById('message-subject').textContent = 'Versleuteld bericht';
+            document.getElementById('body').textContent = m.body;
+            document.getElementById('decrypt-error').textContent = '';
+            document.getElementById('integrity-status').textContent = '';
+        };
+        document.getElementById('message-key').addEventListener('input', resetPlaintext);
+        document.getElementById('hmac-key').addEventListener('input', resetPlaintext);
+        document.getElementById('decrypt').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const keyInput = document.getElementById('message-key');
+            const hmacInput = document.getElementById('hmac-key');
+            const errorOutput = document.getElementById('decrypt-error');
+            resetPlaintext();
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            keyInput.disabled = true;
+            hmacInput.disabled = true;
+            try {
+                const plaintext = await decryptMessage(m, keyInput.value, hmacInput.value);
+                await rememberKey(keyInput.value);
+                keyInput.value = '';
+                hmacInput.value = '';
+                if (!form.isConnected) return;
+                document.getElementById('message-subject').textContent = 'Ontsleuteld bericht';
+                document.getElementById('body').textContent = plaintext;
+                document.getElementById('integrity-status').textContent = 'Integriteit gecontroleerd (HMAC-SHA-256).';
+            } catch (error) {
+                if (form.isConnected) errorOutput.textContent = error.message;
+            } finally {
+                button.disabled = false;
+                keyInput.disabled = false;
+                hmacInput.disabled = false;
+            }
+        });
+    }
 
     document.getElementById('delete').addEventListener('click', async () => {
         if (confirm('Ben je zeker dat je dit bericht wil verwijderen?')) {
@@ -174,7 +243,7 @@ async function renderNew() {
         <p class="text-muted">Van: ${escapeHtml(currentUser())}</p>
         <div class="row">
             <div class="col-md-8">
-                <form id="compose">
+                <form id="compose" autocomplete="off">
                     <div class="form-group">
                         <label for="recipient">Aan</label>
                         <input id="recipient" class="form-control" list="known-users" autocomplete="off"
@@ -184,27 +253,58 @@ async function renderNew() {
                         </datalist>
                     </div>
                     <div class="form-group">
-                        <label for="subject">Onderwerp</label>
-                        <input id="subject" class="form-control" required maxlength="100" />
-                    </div>
-                    <div class="form-group">
                         <label for="text">Bericht</label>
-                        <textarea id="text" class="form-control" rows="6" required maxlength="2000"></textarea>
+                        <textarea id="text" class="form-control" rows="2" required maxlength="40"></textarea>
                     </div>
+                    ${keyField()}
+                    <p id="key-length" class="text-muted" aria-live="polite"></p>
+                    <p id="compose-error" class="text-danger" role="alert"></p>
                     <button type="submit" class="btn btn-primary">Versturen</button>
                     <a href="#/inbox" class="btn btn-link">Annuleren</a>
                 </form>
             </div>
         </div>`;
 
-    document.getElementById('compose').addEventListener('submit', async (event) => {
+    const form = document.getElementById('compose');
+    const bodyInput = document.getElementById('text');
+    const keyInput = document.getElementById('message-key');
+    const hmacInput = document.getElementById('hmac-key');
+    const recipientInput = document.getElementById('recipient');
+    const updateLength = () => {
+        document.getElementById('key-length').textContent =
+            `${bodyInput.value.length} van 40 tekens. Alleen A–Z, 0–9 en spaties; kleine letters worden hoofdletters.`;
+    };
+    form.addEventListener('input', updateLength);
+    updateLength();
+
+    form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        await api.send({
-            recipient: document.getElementById('recipient').value.trim(),
-            subject: document.getElementById('subject').value,
-            body: document.getElementById('text').value,
-        });
-        location.hash = '#/inbox';
+        const button = form.querySelector('button[type="submit"]');
+        const errorOutput = document.getElementById('compose-error');
+        if (button.disabled) return;
+        button.disabled = true;
+        const inputs = [bodyInput, keyInput, hmacInput, recipientInput];
+        for (const input of inputs) input.disabled = true;
+        errorOutput.textContent = '';
+        try {
+            const recipient = recipientInput.value.trim();
+            if (recipient.length < 2 || recipient.length > 40) throw new Error('Vul een ontvanger van 2 tot 40 tekens in.');
+            const encrypted = await encryptMessage(bodyInput.value, keyInput.value, hmacInput.value, currentUser(), recipient);
+            // Reserveer vóór de aanvraag: bij een netwerkfout kan het bericht toch aangekomen zijn.
+            await rememberKey(keyInput.value, true);
+            keyInput.value = '';
+            hmacInput.value = '';
+            if (!form.isConnected) return;
+            await api.send({ recipient, ...encrypted });
+            bodyInput.value = '';
+            if (form.isConnected) location.hash = '#/inbox';
+        } catch (error) {
+            errorOutput.textContent = error.message + ' Als een verzendpoging is gestart, gebruik dan een nieuwe sleutel.';
+        } finally {
+            button.disabled = false;
+            if (form.isConnected) updateLength();
+            for (const input of inputs) input.disabled = false;
+        }
     });
 }
 
