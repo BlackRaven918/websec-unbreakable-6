@@ -35,7 +35,7 @@ export const api = {
     inbox: (from) => call('GET', '/messages' + (from ? '?from=' + encodeURIComponent(from) : '')),
     message: (id) => call('GET', '/messages/' + id),
     send: ({ recipient, subject, body }) => {
-        if (subject !== MARKER || !isEncrypted({ subject, body })) throw new Error('Alleen mod63-berichten met HMAC kunnen worden verstuurd.');
+        if (subject !== MARKER || !isEncrypted({ subject, body })) throw new Error('Alleen mod37-berichten met HMAC kunnen worden verstuurd.');
         return call('POST', '/messages', { recipient, subject, body });
     },
     remove: (id) => call('DELETE', '/messages/' + id),

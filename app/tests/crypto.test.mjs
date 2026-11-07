@@ -6,59 +6,75 @@ import test from 'node:test';
 // Load browser modules without adding a package.json to the .NET app.
 const source = await readFile(new URL('../wwwroot/js/crypto.js', import.meta.url), 'utf8');
 const cryptoUrl = 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-const { ALPHABET, encryptMessage, decryptMessage, isEncrypted, requiredKeyLength, rememberKey } = await import(cryptoUrl);
-const newKey = (length = 80) => Array.from({ length }, () => ALPHABET[randomInt(63)]).join('');
+const {
+    ALPHABET, normalize, parseCodebookLine, encryptText, decryptText,
+    encryptMessage, decryptMessage, isEncrypted, rememberKey,
+} = await import(cryptoUrl);
+const newKey = () => Array.from({ length: 40 }, () => ALPHABET[randomInt(37)]).join('');
+const line = (number, key = newKey()) => `    ${number}\t${key}`;
+const HMAC_KEY = 'Hmac_sleutel_voor_de_test_0123456789';
 
-test('mod63 preserves case, punctuation, spaces, Unicode and line breaks', () => {
-    const subject = 'Hé 👋';
-    const body = '<script> & "\' _\n你好\n\u0000';
-    const key = newKey(Math.max(80, requiredKeyLength(subject, body)));
-    const message = encryptMessage(subject, body, key);
-    assert.ok(isEncrypted(message));
-    assert.deepEqual(decryptMessage(message, key), { subject, body });
-    assert.equal(message.subject, 'MOD63:1');
-    assert.equal(message.body.length, 8 + requiredKeyLength(subject, body));
-    assert.ok(!message.body.includes(subject));
-    assert.ok(!message.body.includes(body));
+test('mod37 with the example from the slides: HELLO + AI8OP = HMIZ3', () => {
+    assert.equal(ALPHABET.length, 37);
+    assert.equal(encryptText('HELLO', 'AI8OP'), 'HMIZ3');
+    assert.equal(decryptText('HMIZ3', 'AI8OP'), 'HELLO');
 });
 
-test('known mod63 arithmetic, wraparound, exact capacity and no repeated key', () => {
-    // UTF-8 A/newline/B -> base63 BC AK BD; adding _ (62) wraps by one.
-    const key = '_'.repeat(80);
-    assert.equal(encryptMessage('A', 'B', key).body, 'MOD63:1:AB_JAC');
-    assert.deepEqual(decryptMessage(encryptMessage('A', 'B', key), key), { subject: 'A', body: 'B' });
-    assert.equal(requiredKeyLength('A', 'b'.repeat(38)), 80);
-    encryptMessage('A', 'b'.repeat(38), key);
-    assert.throws(() => encryptMessage('A', 'b'.repeat(39), key), /82/);
-    for (const invalid of ['', 'A'.repeat(79), 'A'.repeat(80) + '\n', 'A'.repeat(79) + '!']) {
-        assert.throws(() => encryptMessage('A', 'B', invalid), /sleutel/);
-    }
-    assert.throws(() => encryptMessage('A\nB', 'C', key));
-    assert.throws(() => encryptMessage('A', 'b'.repeat(1000), newKey(3000)), /te lang/);
+test('lowercase becomes uppercase, a space becomes _, other characters are refused', () => {
+    assert.equal(normalize('Hallo Jasper 2'), 'HALLO_JASPER_2');
+    assert.throws(() => normalize('Hallo!'), /!/);
+    assert.throws(() => normalize('café'), /É/);
 });
 
-test('rejects malformed ciphertext and invalid decoded bytes', () => {
-    for (const body of ['plain text', 'MOD63:1:', 'MOD63:1:A', 'MOD63:1:AA\n', 'MOD63:1:AA!_']) {
-        assert.equal(isEncrypted({ subject: 'MOD63:1', body }), false);
+test('a codebook line needs a number and exactly 40 characters', () => {
+    const key = newKey();
+    assert.deepEqual(parseCodebookLine(line(7, key)), { number: 7, key });
+    assert.deepEqual(parseCodebookLine('12 ' + key), { number: 12, key });
+    for (const invalid of [key, line(0, key), '3 ' + key.slice(1), '3 ' + key.toLowerCase().replace(/[^a-z]/, 'a')]) {
+        assert.throws(() => parseCodebookLine(invalid), /codeboek/);
     }
-    assert.throws(() => decryptMessage({ subject: 'MOD63:1', body: 'MOD63:1:__' }, 'A'.repeat(80)));
-    assert.throws(() => decryptMessage({ subject: 'MOD63:1', body: 'MOD63:1:EC' }, 'A'.repeat(80)));
+});
+
+test('only ciphertext, line number and MAC leave the browser; the receiver decrypts', async () => {
+    const codebookLine = line(7);
+    const message = await encryptMessage('Hallo Jasper', codebookLine, HMAC_KEY, 'Mohammed', 'Jasper');
+    assert.equal(message.subject, 'MOD37:1');
+    assert.match(message.body, /^MOD37:1:7:[A-Z0-9_]{12}:[a-f0-9]{64}$/);
+    assert.ok(!message.body.includes('HALLO'));
+    const stored = { ...message, sender: 'Mohammed', recipient: 'Jasper' };
+    assert.ok(isEncrypted(stored));
+    assert.equal(await decryptMessage(stored, codebookLine, HMAC_KEY), 'HALLO JASPER');
+    await assert.rejects(encryptMessage('A'.repeat(41), codebookLine, HMAC_KEY, 'Mohammed', 'Jasper'), /40/);
+    await assert.rejects(encryptMessage('Hallo', codebookLine, 'kort', 'Mohammed', 'Jasper'), /HMAC/);
+});
+
+test('the MAC detects a changed ciphertext, line number, sender or HMAC key', async () => {
+    const key = newKey();
+    const message = await encryptMessage('Om acht uur', line(3, key), HMAC_KEY, 'Mohammed', 'Jasper');
+    const stored = { ...message, sender: 'Mohammed', recipient: 'Jasper' };
+    const [, , number, ciphertext, tag] = stored.body.split(':');
+    const changed = ciphertext.slice(0, -1) + (ciphertext.endsWith('A') ? 'B' : 'A');
+    const tampered = { ...stored, body: `MOD37:1:${number}:${changed}:${tag}` };
+    await assert.rejects(decryptMessage(tampered, line(3, key), HMAC_KEY), /Integriteitscontrole mislukt/);
+    const otherLine = { ...stored, body: `MOD37:1:4:${ciphertext}:${tag}` };
+    await assert.rejects(decryptMessage(otherLine, line(4, key), HMAC_KEY), /Integriteitscontrole mislukt/);
+    await assert.rejects(decryptMessage({ ...stored, sender: 'Eve' }, line(3, key), HMAC_KEY), /Integriteitscontrole mislukt/);
+    await assert.rejects(decryptMessage(stored, line(3, key), HMAC_KEY + 'x'), /Integriteitscontrole mislukt/);
+    await assert.rejects(decryptMessage(stored, line(5, key), HMAC_KEY), /lijn 3/);
 });
 
 test('local reuse history stores only fingerprints; decrypting remains repeatable', async () => {
     const storage = new Map();
     globalThis.localStorage = { getItem: name => storage.get(name), setItem: (name, value) => storage.set(name, value) };
-    const key = newKey();
+    const key = line(1);
     await rememberKey(key, true);
     await assert.rejects(rememberKey(key, true), /al gebruikt/);
     await rememberKey(key);
     assert.equal(storage.size, 1);
-    assert.ok(!JSON.stringify([...storage]).includes(key));
+    assert.ok(!JSON.stringify([...storage]).includes(key.trim()));
     assert.match([...storage.keys()][0], /^unbreakable_used_key_[a-f0-9]{64}$/);
-    const secondKey = newKey();
-    await rememberKey(secondKey, true);
     globalThis.localStorage.setItem = () => { throw new Error('Storage disabled'); };
-    await assert.rejects(rememberKey(newKey(), true), /Lokale opslag/);
+    await assert.rejects(rememberKey(line(2), true), /Lokale opslag/);
 });
 
 test('API sends only ciphertext and routing metadata, even with extra key/plaintext properties', async () => {
@@ -71,17 +87,14 @@ test('API sends only ciphertext and routing metadata, even with extra key/plaint
         requests.push({ url, ...options });
         return { ok: true, headers: new Headers({ 'Content-Type': 'application/json' }), json: async () => ({ id: 1 }) };
     };
-    const key = newKey();
-    const encrypted = encryptMessage('Hello', 'Secret text!', key);
-    await api.send({ recipient: 'Bram', ...encrypted, key, plaintext: 'Secret text!' });
+    const key = line(9);
+    const encrypted = await encryptMessage('Geheim', key, HMAC_KEY, 'Anna', 'Bram');
+    await api.send({ recipient: 'Bram', ...encrypted, key, plaintext: 'GEHEIM' });
     assert.deepEqual(JSON.parse(requests[0].body), { recipient: 'Bram', ...encrypted });
-    assert.ok(!JSON.stringify(requests).includes(key));
-    assert.ok(!JSON.stringify(requests).includes('Secret text!'));
-    assert.throws(() => api.send({ recipient: 'Bram', subject: 'Plain', body: 'Secret text!' }));
+    assert.ok(!JSON.stringify(requests).includes(key.trim().split('\t')[1]));
+    assert.ok(!JSON.stringify(requests).includes('GEHEIM'));
+    assert.throws(() => api.send({ recipient: 'Bram', subject: 'Plain', body: 'GEHEIM' }));
     assert.equal(requests.length, 1);
-    await api.exportJson();
-    assert.equal(requests[1].url, '/api/messages/export');
-    assert.equal(requests[1].body, undefined);
 });
 
 test('compose encrypts before sending; reading decrypts locally and renders plaintext as text', async () => {
@@ -120,20 +133,18 @@ test('compose encrypts before sending; reading decrypts locally and renders plai
         .replace("'./api.js'", JSON.stringify(apiUrl)).replace("'./crypto.js'", JSON.stringify(cryptoUrl))
         .replace(/\nroute\(\);\s*$/, '\nawait route();\nexport { route };');
     const { route } = await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'));
-    const key = newKey();
-    const subject = '<img src=x>';
-    const body = 'Private 👋';
+    const key = line(11);
     element('recipient').value = 'Bram';
-    element('subject').value = subject;
-    element('text').value = body;
+    element('text').value = 'Tot morgen';
     element('message-key').value = key;
+    element('hmac-key').value = HMAC_KEY;
     await element('compose').listeners.submit({ preventDefault() {}, currentTarget: element('compose') });
     assert.equal(location.hash, '#/inbox');
     assert.equal(element('message-key').value, '');
     assert.equal(element('text').value, '');
     assert.ok(isEncrypted(saved));
-    assert.ok(!JSON.stringify(requests).includes(key));
-    assert.ok(!JSON.stringify(requests).includes(body));
+    assert.ok(!JSON.stringify(requests).includes(key.trim().split('\t')[1]));
+    assert.ok(!JSON.stringify(requests).includes('TOT_MORGEN'));
 
     storage.set('unbreakable_user', 'Bram');
     location.hash = '#/bericht/1';
@@ -141,19 +152,19 @@ test('compose encrypts before sending; reading decrypts locally and renders plai
     assert.equal(element('body').textContent, saved.body);
     const beforeDecrypt = requests.length;
     element('message-key').value = key;
+    element('hmac-key').value = HMAC_KEY;
     await element('decrypt').listeners.submit({ preventDefault() {}, currentTarget: element('decrypt') });
-    assert.equal(element('message-subject').textContent, subject);
-    assert.equal(element('body').textContent, body);
-    assert.equal(element('message-key').value, '');
+    assert.equal(element('decrypt-error').textContent, '');
+    assert.equal(element('body').textContent, 'TOT MORGEN');
+    assert.match(element('integrity-status').textContent, /HMAC/);
     assert.equal(requests.length, beforeDecrypt);
-    assert.ok(!JSON.stringify([...storage]).includes(key));
 
     location.hash = '#/nieuw';
     await route();
     element('recipient').value = 'Anna';
-    element('subject').value = 'Reuse';
-    element('text').value = 'Blocked';
+    element('text').value = 'Opnieuw';
     element('message-key').value = key;
+    element('hmac-key').value = HMAC_KEY;
     const beforeReuse = requests.length;
     await element('compose').listeners.submit({ preventDefault() {}, currentTarget: element('compose') });
     assert.match(element('compose-error').textContent, /al gebruikt/);

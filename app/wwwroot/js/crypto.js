@@ -1,117 +1,106 @@
-// Elke sleutelpositie wordt precies eenmaal gebruikt, zonder herhalen.
-export const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
-export const MARKER = 'MOD63:2';
-const PREFIX = MARKER + ':';
-const LEGACY_MARKER = 'MOD63:1';
-const LEGACY_PREFIX = LEGACY_MARKER + ':';
-const INTEGRITY_ERROR = 'Integriteitscontrole mislukt: verkeerde sleutel of gewijzigd bericht.';
+// One-time pad in modulo 37 met een codeboek, plus HMAC-SHA-256.
+// Alfabet: A-Z = 0-25, 0-9 = 26-35 en _ (een spatie) = 36.
+export const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_';
+export const MARKER = 'MOD37:1';
+const KEY_LENGTH = 40;
+const INTEGRITY_ERROR = 'Integriteitscontrole mislukt: verkeerde HMAC-sleutel of gewijzigd bericht.';
 const encoder = new TextEncoder();
 
-export function requiredKeyLength(subject, body) {
-    return encoder.encode(subject + '\n' + body).length * 2;
+// Kleine letters worden hoofdletters, een spatie wordt _. Andere tekens weigeren we.
+export function normalize(text) {
+    const normalized = text.trim().toUpperCase().replace(/\s/g, '_');
+    const invalid = [...new Set(normalized.replace(/[A-Z0-9_]/g, ''))];
+    if (invalid.length > 0) throw new Error('Deze tekens kan je niet versturen: ' + invalid.join(' '));
+    return normalized;
 }
 
-function validateKey(key, length) {
-    if (key.length < 80 || /[^A-Za-z0-9_]/.test(key)) {
-        throw new Error('Gebruik een sleutel van minstens 80 tekens: A–Z, a–z, 0–9 en _.');
+// Een lijn uit het codeboek zoals nl ze toont: het nummer en dan 40 tekens.
+export function parseCodebookLine(line) {
+    const match = /^\s*(\d{1,4})\s+([A-Z0-9_]{40})\s*$/.exec(line);
+    if (!match || Number(match[1]) < 1) {
+        throw new Error('Plak een volledige lijn uit het codeboek: het nummer en de 40 tekens.');
     }
-    if (key.length < length) {
-        throw new Error(`Dit bericht heeft ${length} sleuteltekens nodig; je sleutel heeft er ${key.length}. De sleutel wordt nooit herhaald.`);
+    return { number: Number(match[1]), key: match[2] };
+}
+
+// C = (P + K) mod 37
+export function encryptText(plaintext, key) {
+    let ciphertext = '';
+    for (let i = 0; i < plaintext.length; i++) {
+        const p = ALPHABET.indexOf(plaintext[i]);
+        const k = ALPHABET.indexOf(key[i]);
+        ciphertext += ALPHABET[(p + k) % 37];
     }
+    return ciphertext;
+}
+
+// P = (C - K) mod 37. De + 37 zorgt dat het getal nooit negatief wordt.
+export function decryptText(ciphertext, key) {
+    let plaintext = '';
+    for (let i = 0; i < ciphertext.length; i++) {
+        const c = ALPHABET.indexOf(ciphertext[i]);
+        const k = ALPHABET.indexOf(key[i]);
+        plaintext += ALPHABET[(c - k + 37) % 37];
+    }
+    return plaintext;
+}
+
+async function importHmacKey(hmacKey, key) {
+    if (typeof hmacKey !== 'string' || hmacKey.length < 32 || /[^A-Za-z0-9_]/.test(hmacKey)) {
+        throw new Error('Gebruik een aparte HMAC-sleutel van minstens 32 tekens: A–Z, a–z, 0–9 en _.');
+    }
+    if (hmacKey === key) throw new Error('De HMAC-sleutel moet verschillen van de sleutel uit het codeboek.');
+    if (!globalThis.crypto?.subtle) throw new Error('Open de app via HTTPS of localhost.');
+    return crypto.subtle.importKey('raw', encoder.encode(hmacKey), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+}
+
+// De MAC beschermt de ciphertext, het lijnnummer, de afzender en de ontvanger.
+function authenticatedData(sender, recipient, number, ciphertext) {
+    return encoder.encode(JSON.stringify([MARKER, sender, recipient, number, ciphertext]));
+}
+
+// MOD37:1:<lijnnummer>:<ciphertext>:<hmac>
+export function parseEnvelope(message) {
+    const match = /^MOD37:1:([1-9]\d{0,3}):([A-Z0-9_]{1,40}):([a-f0-9]{64})$/.exec(message.body ?? '');
+    if (message.subject !== MARKER || !match) return null;
+    return { number: Number(match[1]), ciphertext: match[2], tag: match[3] };
 }
 
 export function isEncrypted(message) {
-    if (typeof message.body !== 'string' || message.body.length > 2000) return false;
-    if (message.subject === MARKER) {
-        return /^MOD63:2:(?:[A-Za-z0-9_]{2})+:[a-f0-9]{64}$/.test(message.body)
-            && !message.body.endsWith('\n');
-    }
-    return message.subject === LEGACY_MARKER
-        && /^MOD63:1:(?:[A-Za-z0-9_]{2})+$/.test(message.body)
-        && !message.body.endsWith('\n');
+    return parseEnvelope(message) !== null;
 }
 
-// Ook beschadigde enveloppen moeten naar het ontsleutelformulier, nooit naar plaintext-weergave.
+// Ook een beschadigd bericht gaat naar het ontsleutelformulier, nooit naar de gewone weergave.
 export function isEncryptedEnvelope(message) {
-    return [MARKER, LEGACY_MARKER].includes(message.subject)
-        || (typeof message.body === 'string' && message.body.startsWith('MOD63:'));
+    return message.subject === MARKER || (typeof message.body === 'string' && message.body.startsWith('MOD37:'));
 }
 
-export function isAuthenticatedEnvelope(message) {
-    return message.subject === MARKER
-        || (typeof message.body === 'string' && message.body.startsWith(PREFIX));
-}
-
-function validateHmacKey(key, encryptionKey) {
-    if (typeof key !== 'string' || key.length < 80 || /[^A-Za-z0-9_]/.test(key)) {
-        throw new Error('Gebruik een aparte HMAC-sleutel van minstens 80 tekens: A–Z, a–z, 0–9 en _.');
+export async function encryptMessage(text, codebookLine, hmacKey, sender, recipient) {
+    const plaintext = normalize(text);
+    const { number, key } = parseCodebookLine(codebookLine);
+    if (plaintext.length < 1 || plaintext.length > KEY_LENGTH) {
+        throw new Error(`Een bericht heeft 1 tot ${KEY_LENGTH} tekens, zo lang als een lijn uit het codeboek.`);
     }
-    if (key === encryptionKey) throw new Error('De HMAC-sleutel moet verschillen van de mod63-sleutel.');
-}
-
-async function importHmacKey(key, encryptionKey) {
-    validateHmacKey(key, encryptionKey);
-    if (!globalThis.crypto?.subtle) throw new Error('Open de app via HTTPS of localhost.');
-    return crypto.subtle.importKey('raw', encoder.encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
-}
-
-function authenticatedData(ciphertext) {
-    return encoder.encode(JSON.stringify([MARKER, ciphertext]));
-}
-
-export async function encryptMessage(subject, body, key, hmacKey) {
-    if (!subject || subject.length > 100 || /[\r\n]/.test(subject) || !body || body.length > 2000) {
-        throw new Error('Vul een onderwerp (maximaal 100 tekens) en een bericht (maximaal 2000 tekens) in.');
-    }
-    const bytes = encoder.encode(subject + '\n' + body);
-    validateKey(key, bytes.length * 2);
-    if (PREFIX.length + bytes.length * 2 + 65 > 2000) {
-        throw new Error('Het versleutelde bericht is te lang (maximaal 2000 tekens).');
-    }
-    let ciphertext = '';
-    for (const byte of bytes) {
-        for (const value of [Math.floor(byte / 63), byte % 63]) {
-            ciphertext += ALPHABET[(value + ALPHABET.indexOf(key[ciphertext.length])) % 63];
-        }
-    }
-    const authenticationKey = await importHmacKey(hmacKey, key);
-    const tag = await crypto.subtle.sign('HMAC', authenticationKey, authenticatedData(ciphertext));
+    const ciphertext = encryptText(plaintext, key);
+    const hmac = await importHmacKey(hmacKey, key);
+    const tag = await crypto.subtle.sign('HMAC', hmac, authenticatedData(sender, recipient, number, ciphertext));
     const hex = Array.from(new Uint8Array(tag), byte => byte.toString(16).padStart(2, '0')).join('');
-    return { subject: MARKER, body: PREFIX + ciphertext + ':' + hex };
+    return { subject: MARKER, body: `${MARKER}:${number}:${ciphertext}:${hex}` };
 }
 
-export async function decryptMessage(message, key, hmacKey) {
-    const authenticated = isAuthenticatedEnvelope(message);
-    if (!isEncrypted(message)) throw new Error(authenticated ? INTEGRITY_ERROR : 'Dit is geen ondersteund mod63-bericht.');
-    let ciphertext;
-    if (authenticated) {
-        const authenticationKey = await importHmacKey(hmacKey, key);
-        const parts = message.body.slice(PREFIX.length).split(':');
-        ciphertext = parts[0];
-        const tag = Uint8Array.from(parts[1].match(/../g), hex => parseInt(hex, 16));
-        if (!await crypto.subtle.verify('HMAC', authenticationKey, tag, authenticatedData(ciphertext))) {
-            throw new Error(INTEGRITY_ERROR);
-        }
-    } else {
-        ciphertext = message.body.slice(LEGACY_PREFIX.length);
+export async function decryptMessage(message, codebookLine, hmacKey) {
+    const envelope = parseEnvelope(message);
+    if (!envelope) throw new Error(INTEGRITY_ERROR);
+    const { number, key } = parseCodebookLine(codebookLine);
+    if (number !== envelope.number) {
+        throw new Error(`Dit bericht gebruikt lijn ${envelope.number} uit het codeboek, niet lijn ${number}.`);
     }
-    validateKey(key, ciphertext.length);
-    const values = Array.from(ciphertext, (char, i) =>
-        (ALPHABET.indexOf(char) - ALPHABET.indexOf(key[i]) + 63) % 63);
-    const bytes = [];
-    for (let i = 0; i < values.length; i += 2) {
-        const byte = values[i] * 63 + values[i + 1];
-        if (byte > 255) throw new Error('Ontsleutelen mislukt. Controleer de sleutel en het bericht.');
-        bytes.push(byte);
-    }
-    try {
-        const text = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
-        const separator = text.indexOf('\n');
-        if (separator < 1 || separator > 100 || separator === text.length - 1) throw new Error();
-        return { subject: text.slice(0, separator), body: text.slice(separator + 1) };
-    } catch {
-        throw new Error('Ontsleutelen mislukt. Controleer de sleutel en het bericht.');
-    }
+    const hmac = await importHmacKey(hmacKey, key);
+    const tag = Uint8Array.from(envelope.tag.match(/../g), hex => parseInt(hex, 16));
+    // verify vergelijkt zelf, in constante tijd. Pas als de MAC klopt, ontsleutelen we.
+    const data = authenticatedData(message.sender, message.recipient, envelope.number, envelope.ciphertext);
+    if (!await crypto.subtle.verify('HMAC', hmac, tag, data)) throw new Error(INTEGRITY_ERROR);
+    return decryptText(envelope.ciphertext, key).replaceAll('_', ' ');
 }
 
 // Alleen een vingerafdruk blijft lokaal bewaard, nooit de sleutel zelf.
@@ -123,11 +112,11 @@ export async function rememberKey(key, rejectUsed = false) {
     try {
         const name = 'unbreakable_used_key_' + fingerprint;
         if (rejectUsed && localStorage.getItem(name)) {
-            throw new Error('Deze sleutel werd al gebruikt in deze browser. Gebruik een nieuwe sleutel.');
+            throw new Error('Deze lijn uit het codeboek werd al gebruikt in deze browser. Neem een nieuwe lijn.');
         }
         localStorage.setItem(name, '1');
     } catch (error) {
-        if (error.message.includes('Deze sleutel')) throw error;
+        if (error.message.includes('al gebruikt')) throw error;
         throw new Error('Lokale opslag is nodig om hergebruik van sleutels te blokkeren.');
     }
 }

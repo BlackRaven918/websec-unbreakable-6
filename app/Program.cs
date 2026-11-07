@@ -109,10 +109,10 @@ api.MapPost("/messages", async (Message message, HttpRequest request, Unbreakabl
         return Results.BadRequest("Afzender en ontvanger moeten 2 tot 40 tekens bevatten.");
     }
     // Controleer uitsluitend het formaat; de server heeft nooit de sleutel.
-    if (message.Subject != "MOD63:2" || message.Body == null || message.Body.Length > 2000
-        || !Regex.IsMatch(message.Body, @"\AMOD63:2:(?:[A-Za-z0-9_]{2})+:[a-f0-9]{64}\z"))
+    if (message.Subject != "MOD37:1" || message.Body == null || message.Body.Length > 2000
+        || !Regex.IsMatch(message.Body, @"\AMOD37:1:[1-9][0-9]{0,3}:[A-Z0-9_]{1,40}:[a-f0-9]{64}\z"))
     {
-        return Results.BadRequest("Alleen mod63-versleutelde berichten met HMAC-SHA-256 worden opgeslagen.");
+        return Results.BadRequest("Alleen mod37-berichten met lijnnummer en HMAC-SHA-256 worden opgeslagen.");
     }
 
     message.Sender = user;

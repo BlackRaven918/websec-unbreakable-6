@@ -1,30 +1,27 @@
 // De schermen van Unbreakable. Navigeren gebeurt met het deel na # in de URL.
 
 import { api, currentUser, setUser } from './api.js';
-import { encryptMessage, decryptMessage, isEncryptedEnvelope, isAuthenticatedEnvelope, requiredKeyLength, rememberKey } from './crypto.js';
+import { encryptMessage, decryptMessage, isEncryptedEnvelope, parseEnvelope, rememberKey } from './crypto.js';
 
 const app = document.getElementById('app');
 
-function keyField(withHmac = true) {
+function keyField() {
     return `
         <div class="form-group">
-            <label for="message-key">Gedeelde mod63-sleutel</label>
+            <label for="message-key">Lijn uit het codeboek</label>
             <input id="message-key" type="password" class="form-control" autocomplete="off"
-                   spellcheck="false" autocapitalize="none" required minlength="80"
-                   pattern="[A-Za-z0-9_]{80,}" aria-describedby="key-help" />
-            <small id="key-help" class="form-text text-muted">Plak de sleutel die je persoonlijk hebt uitgewisseld.
-                De sleutel blijft in deze browser. Gebruik elke sleutel voor slechts één bericht.
-                ${withHmac ? 'De aparte HMAC-sleutel controleert of de ciphertext gewijzigd is.' : 'Dit oude bericht heeft geen HMAC-controle.'}</small>
+                   spellcheck="false" autocapitalize="none" required aria-describedby="key-help" />
+            <small id="key-help" class="form-text text-muted">Plak een volledige lijn: het nummer en de 40 tekens.
+                De sleutel blijft in deze browser. Gebruik elke lijn maar één keer.</small>
         </div>
-        ${withHmac ? `
         <div class="form-group">
             <label for="hmac-key">Gedeelde HMAC-sleutel</label>
             <input id="hmac-key" type="password" class="form-control" autocomplete="off"
-                   spellcheck="false" autocapitalize="none" required minlength="80"
-                   pattern="[A-Za-z0-9_]{80,}" aria-describedby="hmac-help" />
-            <small id="hmac-help" class="form-text text-muted">Gebruik een onafhankelijk gegenereerde sleutel
-                van minstens 80 tekens, verschillend van de mod63-sleutel.</small>
-        </div>` : ''}`;
+                   spellcheck="false" autocapitalize="none" required minlength="32"
+                   pattern="[A-Za-z0-9_]{32,}" aria-describedby="hmac-help" />
+            <small id="hmac-help" class="form-text text-muted">Een aparte sleutel van minstens 32 tekens.
+                Die controleert of het bericht onderweg gewijzigd is.</small>
+        </div>`;
 }
 
 function escapeHtml(text) {
@@ -164,7 +161,7 @@ async function renderInbox(params) {
 async function renderMessage(id) {
     const m = await api.message(id);
     const encrypted = isEncryptedEnvelope(m);
-    const authenticated = isAuthenticatedEnvelope(m);
+    const envelope = parseEnvelope(m);
 
     app.innerHTML = `
         <h1 id="message-subject">${encrypted ? 'Versleuteld bericht' : escapeHtml(m.subject)}</h1>
@@ -172,14 +169,14 @@ async function renderMessage(id) {
             <dt class="col-sm-2">Van</dt><dd class="col-sm-10">${escapeHtml(m.sender)}</dd>
             <dt class="col-sm-2">Aan</dt><dd class="col-sm-10">${escapeHtml(m.recipient)}</dd>
             <dt class="col-sm-2">Verzonden</dt><dd class="col-sm-10">${formatDate(m.sentAt)}</dd>
+            ${envelope ? `<dt class="col-sm-2">Codeboek</dt><dd class="col-sm-10">lijn ${envelope.number}</dd>` : ''}
         </dl>
         ${encrypted ? `
             <form id="decrypt" autocomplete="off">
-                ${keyField(authenticated)}
+                ${keyField()}
                 <button type="submit" class="btn btn-primary mb-3">Ontsleutelen in deze browser</button>
                 <p id="decrypt-error" class="text-danger" role="alert"></p>
             </form>` : '<p class="text-warning">Oud bericht: dit werd onversleuteld opgeslagen.</p>'}
-        ${encrypted && !authenticated ? '<p class="text-warning">Oud mod63-bericht: de integriteit kan niet gecontroleerd worden.</p>' : ''}
         <p id="integrity-status" class="text-success" role="status"></p>
         <div class="card mb-3"><div class="card-body message-body" id="body"></div></div>
         <p>
@@ -197,33 +194,33 @@ async function renderMessage(id) {
             document.getElementById('integrity-status').textContent = '';
         };
         document.getElementById('message-key').addEventListener('input', resetPlaintext);
-        if (authenticated) document.getElementById('hmac-key').addEventListener('input', resetPlaintext);
+        document.getElementById('hmac-key').addEventListener('input', resetPlaintext);
         document.getElementById('decrypt').addEventListener('submit', async (event) => {
             event.preventDefault();
             const form = event.currentTarget;
             const keyInput = document.getElementById('message-key');
-            const hmacInput = authenticated ? document.getElementById('hmac-key') : null;
+            const hmacInput = document.getElementById('hmac-key');
             const errorOutput = document.getElementById('decrypt-error');
             resetPlaintext();
             const button = form.querySelector('button[type="submit"]');
             button.disabled = true;
             keyInput.disabled = true;
-            if (hmacInput) hmacInput.disabled = true;
+            hmacInput.disabled = true;
             try {
-                const plaintext = await decryptMessage(m, keyInput.value, hmacInput?.value);
+                const plaintext = await decryptMessage(m, keyInput.value, hmacInput.value);
                 await rememberKey(keyInput.value);
                 keyInput.value = '';
-                if (hmacInput) hmacInput.value = '';
+                hmacInput.value = '';
                 if (!form.isConnected) return;
-                document.getElementById('message-subject').textContent = plaintext.subject;
-                document.getElementById('body').textContent = plaintext.body;
-                document.getElementById('integrity-status').textContent = authenticated ? 'Integriteit gecontroleerd (HMAC-SHA-256).' : '';
+                document.getElementById('message-subject').textContent = 'Ontsleuteld bericht';
+                document.getElementById('body').textContent = plaintext;
+                document.getElementById('integrity-status').textContent = 'Integriteit gecontroleerd (HMAC-SHA-256).';
             } catch (error) {
                 if (form.isConnected) errorOutput.textContent = error.message;
             } finally {
                 button.disabled = false;
                 keyInput.disabled = false;
-                if (hmacInput) hmacInput.disabled = false;
+                hmacInput.disabled = false;
             }
         });
     }
@@ -256,12 +253,8 @@ async function renderNew() {
                         </datalist>
                     </div>
                     <div class="form-group">
-                        <label for="subject">Onderwerp</label>
-                        <input id="subject" class="form-control" required maxlength="100" />
-                    </div>
-                    <div class="form-group">
                         <label for="text">Bericht</label>
-                        <textarea id="text" class="form-control" rows="6" required maxlength="2000"></textarea>
+                        <textarea id="text" class="form-control" rows="2" required maxlength="40"></textarea>
                     </div>
                     ${keyField()}
                     <p id="key-length" class="text-muted" aria-live="polite"></p>
@@ -273,15 +266,13 @@ async function renderNew() {
         </div>`;
 
     const form = document.getElementById('compose');
-    const subjectInput = document.getElementById('subject');
     const bodyInput = document.getElementById('text');
     const keyInput = document.getElementById('message-key');
     const hmacInput = document.getElementById('hmac-key');
     const recipientInput = document.getElementById('recipient');
     const updateLength = () => {
-        const needed = requiredKeyLength(subjectInput.value, bodyInput.value);
         document.getElementById('key-length').textContent =
-            `${needed} sleuteltekens nodig; ${keyInput.value.length} ingevoerd. Spaties, leestekens en Unicode blijven behouden. Een sleutel van 80 tekens biedt plaats aan 39 UTF-8-bytes voor onderwerp en bericht samen.`;
+            `${bodyInput.value.length} van 40 tekens. Alleen A–Z, 0–9 en spaties; kleine letters worden hoofdletters.`;
     };
     form.addEventListener('input', updateLength);
     updateLength();
@@ -292,20 +283,19 @@ async function renderNew() {
         const errorOutput = document.getElementById('compose-error');
         if (button.disabled) return;
         button.disabled = true;
-        const inputs = [subjectInput, bodyInput, keyInput, hmacInput, recipientInput];
+        const inputs = [bodyInput, keyInput, hmacInput, recipientInput];
         for (const input of inputs) input.disabled = true;
         errorOutput.textContent = '';
         try {
-            const encrypted = await encryptMessage(subjectInput.value, bodyInput.value, keyInput.value, hmacInput.value);
             const recipient = recipientInput.value.trim();
             if (recipient.length < 2 || recipient.length > 40) throw new Error('Vul een ontvanger van 2 tot 40 tekens in.');
+            const encrypted = await encryptMessage(bodyInput.value, keyInput.value, hmacInput.value, currentUser(), recipient);
             // Reserveer vóór de aanvraag: bij een netwerkfout kan het bericht toch aangekomen zijn.
             await rememberKey(keyInput.value, true);
             keyInput.value = '';
             hmacInput.value = '';
             if (!form.isConnected) return;
             await api.send({ recipient, ...encrypted });
-            subjectInput.value = '';
             bodyInput.value = '';
             if (form.isConnected) location.hash = '#/inbox';
         } catch (error) {
