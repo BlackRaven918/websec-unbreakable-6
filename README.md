@@ -36,7 +36,9 @@ app/
     index.html
     js/app.js               de schermen
     js/api.js               alle calls naar de API
+    js/crypto.js            versleutelen en HMAC in de browser (mod 37)
     lib/                    Bootstrap en jQuery
+  tests/crypto.test.mjs     tests voor de versleuteling (node --test)
 docs/threat-model.md        basis threat model van de starter app
 ```
 
@@ -54,38 +56,41 @@ docs/threat-model.md        basis threat model van de starter app
 
 Wie je bent, stuurt de SPA mee in de header `X-User`.
 
-### Berichten versleutelen met mod63 en HMAC-SHA-256
+### Berichten versleutelen met mod 37 en HMAC-SHA-256
 
-Wissel per bericht twee onafhankelijk gegenereerde, willekeurige sleutels persoonlijk uit. Plak ze in **Gedeelde mod63-sleutel** en **Gedeelde HMAC-sleutel**. Beide bevatten minstens 80 tekens uit het onderstaande alfabet en moeten verschillend zijn. De ontvanger gebruikt hetzelfde paar om lokaal te controleren en te ontsleutelen. Onderwerp en bericht worden samen versleuteld voordat de aanvraag vertrekt. Geen van beide sleutels komt in aanvragen, URL's, exports of browseropslag. Afzender, ontvanger, tijdstip en berichtlengte blijven zichtbaar voor de server.
+De browser versleutelt elk bericht met een one-time pad in modulo 37. De server krijgt alleen de versleutelde tekst, nooit het bericht en nooit een sleutel.
 
-Het alfabet is `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_` (indices 0–62). De browser zet `onderwerp + "\n" + bericht` om naar UTF-8. Elke byte wordt twee mod63-symbolen: `floor(byte / 63)` en `byte % 63`. Versleutelen telt bij elk symbool het overeenkomstige sleutelsymbool op, modulo 63; ontsleutelen trekt dit af. Er wordt nooit naar het begin van de sleutel teruggesprongen. Spaties, leestekens, hoofdletters en Unicode blijven behouden.
-
-Een sleutel van 80 tekens biedt plaats aan 40 UTF-8-bytes inclusief het scheidingsteken: 39 bytes voor onderwerp en bericht samen. Het formulier toont hoeveel sleuteltekens nodig zijn. Genereer langere sleutels voor langere berichten, bijvoorbeeld:
+**Het codeboek.** Verzender en ontvanger wisselen vooraf persoonlijk een codeboek en een HMAC-sleutel uit, bijvoorbeeld op een USB-stick of op papier. Niet via de app, de repo of een chat. Maak ze op je eigen pc, niet op de server:
 
 ```bash
-python app/key-generator.py 10 --length 1600 --with-hmac --output keys.json
+tr -dc 'A-Z0-9_' < /dev/urandom | fold -w 40 | head -n 50 | nl > codeboek.txt
+tr -dc 'A-Za-z0-9_' < /dev/urandom | head -c 40 > hmac-sleutel.txt
 ```
 
-Met `--with-hmac` bevat `keys.json` een `keys`-array met objecten met `encryptionKey` en `hmacKey`. De standaardlengte van beide sleutels is 80; `--length` verlengt alleen de mod63-sleutel. Zonder `--with-hmac` blijft de oude uitvoer met losse mod63-sleutels behouden. De generator overschrijft geen bestaand bestand: bewaar het huidige bestand veilig voordat je een nieuw bestand genereert.
+Elke lijn uit het codeboek is een sleutel van 40 tekens die je maar één keer gebruikt. Spreek af wie de even en wie de oneven lijnen neemt. De HMAC-sleutel (minstens 32 tekens) mag je wel hergebruiken. Zet `codeboek.txt` en `hmac-sleutel.txt` nooit in de repo. `app/key-generator.py` hoort bij de vroegere mod63-versie; voor mod 37 gebruik je het codeboek hierboven.
 
-De browser berekent na versleuteling een HMAC-SHA-256 met de aparte HMAC-sleutel. De exacte invoer is de UTF-8-encoding van `JSON.stringify(["MOD63:2", ciphertext])`. De database bewaart `MOD63:2` als onderwerp en `MOD63:2:<ciphertext>:<hmac>` als body. De volledige HMAC bestaat uit 64 kleine hexadecimale tekens. De limiet van 2000 tekens omvat de volledige body: maximaal 1926 ciphertexttekens of 963 UTF-8-bytes inclusief de scheidende newline. De API accepteert voor nieuwe berichten uitsluitend dit formaat en weigert onbekende velden (zoals sleutelvelden). De server heeft de sleutels niet en kan alleen het formaat controleren, niet de HMAC.
+**Alleen hoofdletters.** Het alfabet heeft 37 tekens: `A`–`Z` = 0–25, `0`–`9` = 26–35 en `_` = 36. Kleine letters worden hoofdletters en een spatie wordt `_`. Andere tekens, zoals `é`, `!` of `?`, weigert de app met een foutmelding. Het verschil tussen hoofdletters en kleine letters gaat dus verloren: de ontvanger leest alles in hoofdletters. Een bericht is maximaal 40 tekens, zo lang als een lijn. Er is geen onderwerp meer, want dat zou leesbaar in de databank staan.
 
-Bij ontvangst controleert de browser eerst de HMAC met Web Crypto. Pas daarna wordt ontsleuteld en plaintext getoond. Gewijzigde ciphertext, een gewijzigde HMAC of een verkeerde HMAC-sleutel geven: **Integriteitscontrole mislukt: verkeerde sleutel of gewijzigd bericht.** Succesvol gecontroleerde en ontsleutelde berichten krijgen de melding **Integriteit gecontroleerd (HMAC-SHA-256).** Gebruik HTTPS of localhost voor Web Crypto.
+**Versturen.** Vul de ontvanger en het bericht in, plak een volledige lijn uit het codeboek (het nummer en de 40 tekens, zoals `nl` ze toont) en de HMAC-sleutel.
 
-Gebruik ieder sleutelpaar voor precies één bericht, ook als er nog sleuteltekens over zijn. Alleen SHA-256-vingerafdrukken van mod63-sleutels worden lokaal bewaard om opnieuw verzenden met dezelfde mod63-sleutel te blokkeren. Ontsleutelen blijft mogelijk; een mod63-sleutel waarmee je hebt ontsleuteld mag je niet gebruiken om zelf te verzenden. Na een netwerkfout wordt die sleutel als gebruikt beschouwd. Deze controle geldt alleen voor deze browser/origin en vervalt als de lokale opslag wordt gewist. Standaard gegenereerde `keys.json`-bestanden en backups worden uitgesloten van Git en de Docker-build; houd bestanden met andere namen ook buiten de repository en buildcontext.
+- De browser rekent per teken C = (P + K) mod 37. Het voorbeeld uit de les: `HELLO` met de sleutel `AI8OP` geeft `HMIZ3`.
+- Daarna berekent de browser met Web Crypto een HMAC-SHA-256 over `JSON.stringify(["MOD37:1", afzender, ontvanger, lijnnummer, ciphertext])`.
+- Naar de API gaan alleen het onderwerp `MOD37:1` en de body `MOD37:1:<lijnnummer>:<ciphertext>:<hmac>`. De API controleert alleen dat formaat; ze heeft geen sleutels.
 
-Dit blijft een oefenimplementatie. De HMAC beschermt de versie en ciphertext, niet de afzender, ontvanger of het tijdstip. Iedereen met beide sleutels kan geldige berichten maken; opnieuw aanbieden van een geldig bericht wordt niet gedetecteerd. Een verkeerde mod63-sleutel kan ondanks een geldige HMAC onjuiste plaintext opleveren: de HMAC controleert de ciphertext met de HMAC-sleutel, niet de ingevoerde mod63-sleutel.
+**Lezen.** Het bericht toont welke lijn uit het codeboek het gebruikt. De ontvanger plakt die lijn en de HMAC-sleutel. De browser controleert eerst de HMAC met `verify` en rekent pas daarna terug met P = (C − K) mod 37. Klopt de HMAC niet, dan toont de app **Integriteitscontrole mislukt: verkeerde HMAC-sleutel of gewijzigd bericht.** en geen tekst. Web Crypto werkt alleen via HTTPS of localhost.
 
-Bestaande plaintext- en `MOD63:1`-berichten blijven ongewijzigd in de database en exports. Oude mod63-berichten zijn met hun oorspronkelijke mod63-sleutel leesbaar, maar krijgen een waarschuwing dat hun integriteit niet gecontroleerd kan worden. Beschadigde versie-2-berichten worden geweigerd zonder terugval naar ongecontroleerde ontsleuteling. Wie zowel versie als inhoud wijzigt naar een oud formaat kan die oude leesroute bereiken; die toont altijd de waarschuwing en nooit een succesvolle integriteitscontrole. Zoeken filtert lokaal op afzender.
+De browser bewaart een SHA-256-vingerafdruk van elke gebruikte lijn in `localStorage` en weigert om dezelfde lijn een tweede keer te versturen. Dat werkt alleen in dezelfde browser, dus de echte bescherming blijft de afspraak dat je elke lijn maar één keer gebruikt. Oude, onversleutelde berichten toont de app met een waarschuwing.
+
+**Wat niet beschermd is.** Afzender, ontvanger, tijdstip, lengte en lijnnummer blijven zichtbaar voor de server. Een oud bericht dat opnieuw wordt ingevoegd (replay), wordt niet opgemerkt, en iedereen kan berichten verwijderen. De HMAC-sleutel is gedeeld, dus hij bewijst niet wie van de twee een bericht maakte.
 
 #### Manipulatie aantonen
 
-1. Verstuur een testbericht met onderwerp `Test` en inhoud `Bedrag: 100` met een nieuw sleutelpaar. Open het als ontvanger en controleer dat het correct ontsleutelt.
-2. Open op de server de database met `docker compose exec db psql -U unbreakable -d unbreakable` en zoek het testbericht in `"Messages"`.
-3. Bewaar de originele body. Wijzig één teken in het ciphertextdeel, tussen `MOD63:2:` en de laatste dubbele punt, zonder de HMAC aan te passen. Bewaar het formaat en de lengte.
-4. Vernieuw de berichtpagina en voer hetzelfde sleutelpaar in. De browser toont een integriteitsfout en geen plaintext. Herstel daarna de originele body.
+1. Verstuur een testbericht met een nieuwe lijn uit het codeboek en open het als ontvanger. Het bericht wordt correct ontsleuteld.
+2. Zoek op de server de naam van de databankcontainer met `docker ps` en open de databank met `docker exec -it <naam van de db-container> psql -U unbreakable -d unbreakable`.
+3. Wijzig één teken in het ciphertextdeel van de body, tussen het lijnnummer en de laatste dubbele punt, zonder de HMAC aan te passen.
+4. Vernieuw de berichtpagina en ontsleutel opnieuw met dezelfde lijn en HMAC-sleutel. De app toont de integriteitsfout en geen tekst.
 
-De bestaande tests in `app/tests/crypto.test.mjs` beschrijven het oude, synchrone versie-1-formaat. Ze zijn niet aangepast voor versie 2.
+De tests in `app/tests/crypto.test.mjs` controleren mod 37 (ook `HELLO` + `AI8OP` = `HMIZ3`), de HMAC en dat er alleen ciphertext naar de API gaat. Je start ze met `node --test app/tests/crypto.test.mjs`.
 
 Technologie: ASP.NET Core minimal API op .NET 10, Entity Framework Core met PostgreSQL 17, en vanilla JavaScript met Bootstrap, zonder build stap.
 
